@@ -1,5 +1,6 @@
 import azure.functions as func
 import logging
+import json
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 

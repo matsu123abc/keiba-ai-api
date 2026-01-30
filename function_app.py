@@ -118,3 +118,77 @@ def shutuba(req: func.HttpRequest) -> func.HttpResponse:
         mimetype="application/json"
     )
 
+# -------------------------
+# scoring 関数
+# -------------------------
+@app.route(route="scoring")
+def scoring(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info("scoring function triggered")
+
+    try:
+        body = req.get_json()
+    except:
+        return func.HttpResponse(
+            json.dumps({"error": "JSON ボディが必要です"}, ensure_ascii=False),
+            status_code=400,
+            mimetype="application/json"
+        )
+
+    horses = body.get("horses")
+    if not horses:
+        return func.HttpResponse(
+            json.dumps({"error": "horses が必要です"}, ensure_ascii=False),
+            status_code=400,
+            mimetype="application/json"
+        )
+
+    # シンプルなスコア例（馬番の逆順）
+    scored = []
+    for h in horses:
+        try:
+            score = 100 - int(h.get("umaban", 0))
+        except:
+            score = 0
+
+        scored.append({
+            **h,
+            "score": score
+        })
+
+    return func.HttpResponse(
+        json.dumps({"horses": scored}, ensure_ascii=False),
+        mimetype="application/json"
+    )
+
+
+# -------------------------
+# ranking 関数
+# -------------------------
+@app.route(route="ranking")
+def ranking(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info("ranking function triggered")
+
+    try:
+        body = req.get_json()
+    except:
+        return func.HttpResponse(
+            json.dumps({"error": "JSON ボディが必要です"}, ensure_ascii=False),
+            status_code=400,
+            mimetype="application/json"
+        )
+
+    horses = body.get("horses")
+    if not horses:
+        return func.HttpResponse(
+            json.dumps({"error": "horses が必要です"}, ensure_ascii=False),
+            status_code=400,
+            mimetype="application/json"
+        )
+
+    # score の降順で並べ替え
+    ranked = sorted(horses, key=lambda x: x.get("score", 0), reverse=True)
+
+    return func.HttpResponse(
+        json.dumps({"horses": ranked}, ensure_ascii=False),
+        mimetype="application/json"
+    )

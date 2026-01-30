@@ -117,3 +117,4 @@ def shutuba(req: func.HttpRequest) -> func.HttpResponse:
         json.dumps({"race_id": race_id, "horses": horses}, ensure_ascii=False),
         mimetype="application/json"
     )
+

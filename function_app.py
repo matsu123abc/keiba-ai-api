@@ -242,10 +242,73 @@ def ranking(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json"
         )
 
-    # score の降順で並べ替え
-    ranked = sorted(horses, key=lambda x: x.get("score", 0), reverse=True)
+    ranked = []
+
+    for h in horses:
+        base_score = h.get("score", 0)
+        total = base_score
+
+        # -------------------------
+        # ① 枠順補正（1枠が最も有利）
+        # -------------------------
+        try:
+            waku = int(h.get("waku", 0))
+            waku_bonus = max(0, 10 - (waku - 1) * 1.2)
+            total += waku_bonus
+        except:
+            pass
+
+        # -------------------------
+        # ② 騎手補正（scoring と同じ基準）
+        # -------------------------
+        jockey = h.get("jockey", "")
+        jockey_score_map = {
+            "川田": 8, "ルメール": 8, "戸崎": 6, "横山武": 6,
+            "松山": 5, "坂井": 5, "武豊": 5,
+        }
+        for key, val in jockey_score_map.items():
+            if key in jockey:
+                total += val
+                break
+
+        # -------------------------
+        # ③ オッズ補正（人気馬を加点）
+        # -------------------------
+        odds = h.get("odds")
+        if odds:
+            try:
+                odds_val = float(odds)
+                odds_bonus = max(0, 15 - odds_val * 1.5)
+                total += odds_bonus
+            except:
+                pass
+
+        # -------------------------
+        # ④ 馬番補正（内寄りが有利）
+        # -------------------------
+        try:
+            umaban = int(h.get("umaban", 0))
+            umaban_bonus = max(0, 8 - umaban * 0.3)
+            total += umaban_bonus
+        except:
+            pass
+
+        # -------------------------
+        # 最終スコア
+        # -------------------------
+        total = round(total, 2)
+
+        ranked.append({
+            **h,
+            "ranking_score": total
+        })
+
+    # -------------------------
+    # 降順で並べ替え
+    # -------------------------
+    ranked_sorted = sorted(ranked, key=lambda x: x["ranking_score"], reverse=True)
 
     return func.HttpResponse(
-        json.dumps({"horses": ranked}, ensure_ascii=False),
+        json.dumps({"horses": ranked_sorted}, ensure_ascii=False),
         mimetype="application/json"
     )

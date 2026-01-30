@@ -142,13 +142,71 @@ def scoring(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json"
         )
 
-    # シンプルなスコア例（馬番の逆順）
     scored = []
+
     for h in horses:
+        score = 0
+
+        # -------------------------
+        # ① 枠順スコア（1〜8枠）
+        # -------------------------
         try:
-            score = 100 - int(h.get("umaban", 0))
+            waku = int(h.get("waku", 0))
+            # 内枠有利（例：1枠=+20、8枠=+5）
+            waku_score = max(5, 25 - waku * 3)
+            score += waku_score
         except:
-            score = 0
+            pass
+
+        # -------------------------
+        # ② 騎手スコア（簡易）
+        # -------------------------
+        jockey = h.get("jockey", "")
+        jockey_score_map = {
+            "川田": 25, "ルメール": 25, "戸崎": 20, "横山武": 20,
+            "松山": 18, "坂井": 18, "武豊": 18,
+        }
+        for key, val in jockey_score_map.items():
+            if key in jockey:
+                score += val
+                break
+
+        # -------------------------
+        # ③ 斤量スコア（軽いほど有利）
+        # -------------------------
+        try:
+            weight = float(h.get("weight", "0").replace("kg", "").strip())
+            # 55kg を基準に、1kg 重いごとに -1.5
+            score += max(0, 20 - (weight - 55) * 1.5)
+        except:
+            pass
+
+        # -------------------------
+        # ④ オッズスコア（人気馬を加点）
+        # -------------------------
+        odds = h.get("odds")
+        if odds:
+            try:
+                odds_val = float(odds)
+                # 1番人気（1.0〜2.0）なら +25、10倍なら +5
+                odds_score = max(0, 30 - odds_val * 2)
+                score += odds_score
+            except:
+                pass
+
+        # -------------------------
+        # ⑤ 馬番スコア（軽量）
+        # -------------------------
+        try:
+            umaban = int(h.get("umaban", 0))
+            score += max(0, 15 - umaban * 0.5)
+        except:
+            pass
+
+        # -------------------------
+        # 最終スコア（0〜100に丸める）
+        # -------------------------
+        score = max(0, min(100, round(score, 2)))
 
         scored.append({
             **h,
@@ -159,7 +217,6 @@ def scoring(req: func.HttpRequest) -> func.HttpResponse:
         json.dumps({"horses": scored}, ensure_ascii=False),
         mimetype="application/json"
     )
-
 
 # -------------------------
 # ranking 関数

@@ -315,31 +315,42 @@ def ranking(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="process_past")
 def process_past(req: func.HttpRequest) -> func.HttpResponse:
-    # URL パラメータ取得
     url = req.params.get("url")
 
-    # race_id 抽出（URL がある場合のみ）
+    # race_id 抽出
     race_id = extract_race_id(url) if url else None
 
-    # HTML 取得テスト（URL がある場合のみ）
+    # HTML 取得
     html_status = "未実行"
+    html_bytes = None
     if url:
         try:
             res = requests.get(url, timeout=10)
             res.raise_for_status()
-            html_status = f"成功（{len(res.content)} bytes）"
+            html_bytes = res.content
+            html_status = f"成功（{len(html_bytes)} bytes）"
         except Exception as e:
             html_status = f"エラー: {e}"
 
-    # 結果を返す
+    # テーブル抽出
+    table_status = "未実行"
+    if html_bytes:
+        try:
+            table = extract_shutuba_table(html_bytes)
+            table_status = "成功" if table else "テーブルなし"
+        except Exception as e:
+            table_status = f"エラー: {e}"
+
+    # 結果表示
     body = f"""
     <html>
     <head><meta charset="UTF-8"></head>
     <body>
-        <h2>process_past デバッグ版（ステップ1＋2）</h2>
+        <h2>process_past デバッグ版（ステップ3）</h2>
         <p><b>URL:</b> {url}</p>
         <p><b>race_id:</b> {race_id}</p>
         <p><b>HTML取得:</b> {html_status}</p>
+        <p><b>テーブル抽出:</b> {table_status}</p>
     </body>
     </html>
     """

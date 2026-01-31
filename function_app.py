@@ -321,36 +321,42 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
     race_id = extract_race_id(url) if url else None
 
     # HTML 取得
-    html_status = "未実行"
     html_bytes = None
     if url:
         try:
             res = requests.get(url, timeout=10)
             res.raise_for_status()
             html_bytes = res.content
-            html_status = f"成功（{len(html_bytes)} bytes）"
         except Exception as e:
-            html_status = f"エラー: {e}"
+            return func.HttpResponse(f"HTML取得エラー: {e}", status_code=500)
 
     # テーブル抽出
-    table_status = "未実行"
+    table = None
     if html_bytes:
         try:
             table = extract_shutuba_table(html_bytes)
-            table_status = "成功" if table else "テーブルなし"
         except Exception as e:
-            table_status = f"エラー: {e}"
+            return func.HttpResponse(f"テーブル抽出エラー: {e}", status_code=500)
+
+    # テーブル解析（parse_shutuba_table）
+    parse_status = "未実行"
+    horses = None
+    if table:
+        try:
+            horses = parse_shutuba_table(table)
+            parse_status = f"成功（{len(horses)}頭）"
+        except Exception as e:
+            parse_status = f"エラー: {e}"
 
     # 結果表示
     body = f"""
     <html>
     <head><meta charset="UTF-8"></head>
     <body>
-        <h2>process_past デバッグ版（ステップ3）</h2>
+        <h2>process_past デバッグ版（ステップ4）</h2>
         <p><b>URL:</b> {url}</p>
         <p><b>race_id:</b> {race_id}</p>
-        <p><b>HTML取得:</b> {html_status}</p>
-        <p><b>テーブル抽出:</b> {table_status}</p>
+        <p><b>解析結果:</b> {parse_status}</p>
     </body>
     </html>
     """

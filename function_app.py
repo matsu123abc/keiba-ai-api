@@ -315,4 +315,33 @@ def ranking(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="process_past")
 def process_past(req: func.HttpRequest) -> func.HttpResponse:
-    return func.HttpResponse("process_past 認識テスト成功", status_code=200)
+    # URL パラメータ取得
+    url = req.params.get("url")
+
+    # race_id 抽出（URL がある場合のみ）
+    race_id = extract_race_id(url) if url else None
+
+    # HTML 取得テスト（URL がある場合のみ）
+    html_status = "未実行"
+    if url:
+        try:
+            res = requests.get(url, timeout=10)
+            res.raise_for_status()
+            html_status = f"成功（{len(res.content)} bytes）"
+        except Exception as e:
+            html_status = f"エラー: {e}"
+
+    # 結果を返す
+    body = f"""
+    <html>
+    <head><meta charset="UTF-8"></head>
+    <body>
+        <h2>process_past デバッグ版（ステップ1＋2）</h2>
+        <p><b>URL:</b> {url}</p>
+        <p><b>race_id:</b> {race_id}</p>
+        <p><b>HTML取得:</b> {html_status}</p>
+    </body>
+    </html>
+    """
+
+    return func.HttpResponse(body, mimetype="text/html")

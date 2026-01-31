@@ -313,3 +313,6 @@ def ranking(req: func.HttpRequest) -> func.HttpResponse:
         mimetype="application/json"
     )
 
+@app.route(route="process_past")
+def process_past(req: func.HttpRequest) -> func.HttpResponse:
+    return func.HttpResponse("process_past 認識テスト成功", status_code=200)

@@ -313,52 +313,73 @@ def ranking(req: func.HttpRequest) -> func.HttpResponse:
         mimetype="application/json"
     )
 
+import os
+import azure.functions as func
+import requests
+
+# --- OpenAI import の安全化（ステップ5） ---
+try:
+    from openai import AzureOpenAI
+    openai_available = True
+    openai_import_error = None
+except Exception as e:
+    AzureOpenAI = None
+    openai_available = False
+    openai_import_error = str(e)
+
+
 @app.route(route="process_past")
 def process_past(req: func.HttpRequest) -> func.HttpResponse:
     url = req.params.get("url")
 
-    # race_id 抽出
-    race_id = extract_race_id(url) if url else None
+    # URL が無い場合
+    if not url:
+        return func.HttpResponse("url パラメータが必要です", status_code=400)
 
-    # HTML 取得
-    html_bytes = None
-    if url:
-        try:
-            res = requests.get(url, timeout=10)
-            res.raise_for_status()
-            html_bytes = res.content
-        except Exception as e:
-            return func.HttpResponse(f"HTML取得エラー: {e}", status_code=500)
+    # --- HTML 取得 ---
+    try:
+        res = requests.get(url, timeout=10)
+        res.raise_for_status()
+        html_bytes = res.content
+    except Exception as e:
+        return func.HttpResponse(
+            f"HTML取得エラー: {e}",
+            status_code=500
+        )
 
-    # テーブル抽出
-    table = None
-    if html_bytes:
-        try:
-            table = extract_shutuba_table(html_bytes)
-        except Exception as e:
-            return func.HttpResponse(f"テーブル抽出エラー: {e}", status_code=500)
+    # --- OpenAI import エラー時 ---
+    if not openai_available:
+        return func.HttpResponse(
+            f"OpenAI import エラー: {openai_import_error}",
+            status_code=500
+        )
 
-    # テーブル解析（parse_shutuba_table）
-    parse_status = "未実行"
-    horses = None
-    if table:
-        try:
-            horses = parse_shutuba_table(table)
-            parse_status = f"成功（{len(horses)}頭）"
-        except Exception as e:
-            parse_status = f"エラー: {e}"
+    # --- OpenAI 呼び出し（ステップ6） ---
+    try:
+        client = AzureOpenAI(
+            api_key=os.environ.get("AZURE_OPENAI_API_KEY"),
+            azure_endpoint=os.environ.get("AZURE_OPENAI_ENDPOINT"),
+            api_version="2024-10-21"
+        )
 
-    # 結果表示
-    body = f"""
-    <html>
-    <head><meta charset="UTF-8"></head>
-    <body>
-        <h2>process_past デバッグ版（ステップ4）</h2>
-        <p><b>URL:</b> {url}</p>
-        <p><b>race_id:</b> {race_id}</p>
-        <p><b>解析結果:</b> {parse_status}</p>
-    </body>
-    </html>
-    """
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "HTML を解析して馬の情報を抽出してください。"},
+                {"role": "user", "content": html_bytes.decode("utf-8", errors="ignore")}
+            ]
+        )
 
-    return func.HttpResponse(body, mimetype="text/html")
+        ai_result = response.choices[0].message["content"]
+
+    except Exception as e:
+        return func.HttpResponse(
+            f"OpenAI 呼び出しエラー: {e}",
+            status_code=500
+        )
+
+    # --- 結果返却 ---
+    return func.HttpResponse(
+        ai_result,
+        mimetype="text/plain"
+    )

@@ -313,13 +313,14 @@ def ranking(req: func.HttpRequest) -> func.HttpResponse:
         mimetype="application/json"
     )
 
-
 # =========================================================
-# process_past（調子分析 + AI要約）安全版
+# process_past（調子分析 + AI要約）安全版（shutuba_past + Ajax 過去走対応）
 # =========================================================
 
 import os
 import json
+from typing import List, Dict, Optional
+
 import requests
 from bs4 import BeautifulSoup
 import azure.functions as func
@@ -353,57 +354,173 @@ def get_openai_client():
         return None, f"OpenAI クライアント初期化エラー: {e}"
 
 
-# -------------------------
-# 過去走 Ajax 取得
-# -------------------------
+# =========================================================
+# race_id 抽出
+# =========================================================
+def extract_race_id(url: str) -> str:
+    # クエリから race_id を優先的に取得
+    if "race_id=" in url:
+        try:
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(url).query)
+            if "race_id" in qs and qs["race_id"]:
+                return qs["race_id"][0]
+        except Exception:
+            pass
+
+    # フォールバック：数字12桁を末尾から拾う
+    import re
+    m = re.search(r"(\d{12})", url)
+    if m:
+        return m.group(1)
+
+    return "unknown"
+
+
+# =========================================================
+# 出馬表（shutuba_past.html）→ 馬名・horse_id・枠・馬番・騎手
+# =========================================================
+def extract_shutuba_table_with_links(html_bytes: bytes):
+    soup = BeautifulSoup(html_bytes, "lxml")
+
+    table = soup.find("table", class_="RaceTable01 RaceTable01-HorseList")
+    if table:
+        return table
+
+    table = soup.find("table", class_="Shutuba_Table")
+    if table:
+        return table
+
+    table = soup.find("table", class_="RaceTable01 RaceTable01-Shutuba")
+    if table:
+        return table
+
+    return None
+
+
+def parse_shutuba_table_with_links(table) -> List[Dict]:
+    rows = table.find_all("tr")[1:]
+    horses = []
+
+    for row in rows:
+        cols = row.find_all("td")
+        if len(cols) < 3:
+            continue
+
+        waku = cols[0].get_text(strip=True)
+        umaban = cols[1].get_text(strip=True)
+
+        if not waku or not waku[0].isdigit():
+            continue
+
+        horse_name = ""
+        horse_id = None
+        jockey = ""
+
+        # 馬名・horse_id
+        for c in cols:
+            a = c.find("a")
+            href = (a.get("href") or "") if a else ""
+            if "horse" in href:
+                horse_name = a.get_text(strip=True)
+                horse_url = href
+                horse_id = horse_url.rstrip("/").split("/")[-1]
+                break
+
+        # 騎手名
+        for c in cols:
+            a = c.find("a")
+            href = (a.get("href") or "") if a else ""
+            if "jockey" in href:
+                jockey = a.get_text(strip=True)
+                break
+
+        if not horse_name or not horse_id:
+            continue
+
+        horses.append({
+            "waku": waku,
+            "umaban": umaban,
+            "horse_name": horse_name,
+            "horse_id": horse_id,
+            "jockey": jockey
+        })
+
+    return horses
+
+
+# =========================================================
+# 過去走テーブル（Ajax エンドポイント）
+# =========================================================
 def fetch_past_runs_html(horse_id: str):
+    url = f"https://db.netkeiba.com/horse/ajax_horse_results.html?id={horse_id}"
     try:
-        url = f"https://db.netkeiba.com/horse/ajax/{horse_id}/"
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+            "Referer": "https://db.netkeiba.com/",
+            "Cookie": "device=pc"
+        }
         res = requests.get(url, headers=headers, timeout=10)
         res.raise_for_status()
-        return res.content, None
+
+        # EUC-JP を明示
+        res.encoding = "euc-jp"
+
+        return res.text, None
     except Exception as e:
         return None, f"過去走HTML取得エラー: {e}"
 
 
-# -------------------------
-# 過去走テーブル抽出
-# -------------------------
-def extract_past_table(html_bytes: bytes):
-    try:
-        soup = BeautifulSoup(html_bytes, "lxml")
-        return soup.find("table"), None
-    except Exception as e:
-        return None, f"過去走テーブル抽出エラー: {e}"
+def extract_past_table_from_ajax(html_text: str):
+    soup = BeautifulSoup(html_text, "lxml")
+    return soup.find("table")
 
 
-# -------------------------
-# 過去5走パース
-# -------------------------
-def parse_past_5runs(table):
-    try:
-        rows = table.find_all("tr")[1:6]
-        results = []
+def parse_past_5runs_for_condition(table) -> List[Dict]:
+    rows = table.find_all("tr")
+    if len(rows) <= 1:
+        return []
 
-        for tr in rows:
-            tds = tr.find_all("td")
-            if len(tds) < 16:
-                continue
+    header_cells = rows[0].find_all(["th", "td"])
+    col_map = {cell.get_text(strip=True): idx for idx, cell in enumerate(header_cells)}
 
-            results.append({
-                "date": tds[0].text.strip(),
-                "race_name": tds[4].text.strip(),
-                "rank": tds[11].text.strip(),
-                "time": tds[12].text.strip(),
-                "margin": tds[13].text.strip(),
-                "pop": tds[14].text.strip(),
-                "odds": tds[15].text.strip()
-            })
+    def get(cols, col_name):
+        if col_name in col_map:
+            idx = col_map[col_name]
+            if idx < len(cols):
+                return cols[idx].get_text(strip=True)
+        return ""
 
-        return results, None
-    except Exception as e:
-        return None, f"過去走パースエラー: {e}"
+    past_runs = []
+
+    for row in rows[1:6]:
+        cols = row.find_all("td")
+        if not cols:
+            continue
+
+        past_runs.append({
+            "date": get(cols, "日付"),
+            "race_name": get(cols, "レース名"),
+            "class": get(cols, "クラス"),
+            "distance": get(cols, "距離"),
+            "baba": get(cols, "馬場"),
+            "rank": get(cols, "着順"),
+            "time": get(cols, "タイム"),
+            "agari": get(cols, "上り"),
+            "passing": get(cols, "通過"),
+            "jockey": get(cols, "騎手"),
+            "weight": get(cols, "斤量"),
+            "body_weight": get(cols, "馬体重"),
+            "pop": get(cols, "人気"),
+            "margin": get(cols, "着差"),
+        })
+
+    return past_runs
 
 
 # -------------------------
@@ -417,32 +534,38 @@ def extract_features(past_runs):
         distance_fit_list = []   # 距離適性
         baba_fit_list = []       # 馬場適性
 
-        # レースレベル判定用
         def get_race_level(name):
-            if "G1" in name: return 6
-            if "G2" in name: return 5
-            if "G3" in name: return 4
-            if "OP" in name: return 3
-            if "3勝" in name: return 2
-            if "2勝" in name: return 1
+            if "G1" in name:
+                return 6
+            if "G2" in name:
+                return 5
+            if "G3" in name:
+                return 4
+            if "OP" in name:
+                return 3
+            if "3勝" in name:
+                return 2
+            if "2勝" in name:
+                return 1
             return 0
 
-        # 距離抽出
         def parse_distance(s):
             try:
                 return int(s.replace("m", "").strip())
-            except:
+            except Exception:
                 return None
 
-        # 馬場適性（良・稍重・重・不良）
         def parse_baba(s):
-            if "良" in s: return "良"
-            if "稍" in s: return "稍重"
-            if "重" in s: return "重"
-            if "不" in s: return "不良"
+            if "良" in s:
+                return "良"
+            if "稍" in s:
+                return "稍重"
+            if "重" in s:
+                return "重"
+            if "不" in s:
+                return "不良"
             return None
 
-        # 直近の距離・馬場（比較用）
         last_distance = None
         last_baba = None
 
@@ -451,25 +574,27 @@ def extract_features(past_runs):
             last_baba = parse_baba(past_runs[0].get("baba", ""))
 
         for r in past_runs:
-            # 既存特徴量
-            try: ranks.append(int(r["rank"]))
-            except: pass
-            try: pops.append(int(r["pop"]))
-            except: pass
-            try: margins.append(float(r["margin"]))
-            except: pass
+            try:
+                ranks.append(int(r.get("rank", "")))
+            except Exception:
+                pass
+            try:
+                pops.append(int(r.get("pop", "")))
+            except Exception:
+                pass
+            try:
+                margins.append(float(r.get("margin", "")))
+            except Exception:
+                pass
 
-            # ① 上がり順位
             try:
                 agari = int(r.get("agari", ""))
                 agari_list.append(agari)
-            except:
+            except Exception:
                 pass
 
-            # ② レースレベル
             race_levels.append(get_race_level(r.get("race_name", "")))
 
-            # ③ 距離適性（延長=+1、短縮=-1、同距離=0）
             dist = parse_distance(r.get("distance", ""))
             if dist and last_distance:
                 if dist > last_distance:
@@ -479,19 +604,16 @@ def extract_features(past_runs):
                 else:
                     distance_fit_list.append(0)
 
-            # ④ 馬場適性（同馬場=+1、違う=0）
             baba = parse_baba(r.get("baba", ""))
             if baba and last_baba:
                 baba_fit_list.append(1 if baba == last_baba else 0)
 
         return {
-            "avg_rank": sum(ranks)/len(ranks) if ranks else 99,
-            "avg_pop": sum(pops)/len(pops) if pops else 99,
-            "avg_margin": sum(margins)/len(margins) if margins else 9.9,
-
-            # 追加特徴量
-            "avg_agari": sum(agari_list)/len(agari_list) if agari_list else 99,
-            "avg_race_level": sum(race_levels)/len(race_levels) if race_levels else 0,
+            "avg_rank": sum(ranks) / len(ranks) if ranks else 99,
+            "avg_pop": sum(pops) / len(pops) if pops else 99,
+            "avg_margin": sum(margins) / len(margins) if margins else 9.9,
+            "avg_agari": sum(agari_list) / len(agari_list) if agari_list else 99,
+            "avg_race_level": sum(race_levels) / len(race_levels) if race_levels else 0,
             "distance_fit": sum(distance_fit_list) if distance_fit_list else 0,
             "baba_fit": sum(baba_fit_list) if baba_fit_list else 0
         }, None
@@ -499,30 +621,24 @@ def extract_features(past_runs):
     except Exception as e:
         return None, f"特徴量抽出エラー: {e}"
 
+
 # -------------------------
 # 調子スコア
 # -------------------------
 def calc_condition_score(f):
     score = 100
 
-    # 既存特徴量
     score -= f["avg_rank"] * 2
     score -= f["avg_pop"] * 1.5
     score -= f["avg_margin"] * 5
 
-    # ① 上がり順位（良いほど加点）
     score -= f["avg_agari"] * 1.2
-
-    # ② レースレベル（高いほど加点）
     score += f["avg_race_level"] * 3
-
-    # ③ 距離適性（延長/短縮の成否）
     score += f["distance_fit"] * 5
-
-    # ④ 馬場適性（同馬場で好走していれば加点）
     score += f["baba_fit"] * 4
 
     return max(0, min(100, round(score, 2)))
+
 
 # -------------------------
 # 血統テキスト取得
@@ -578,13 +694,15 @@ def generate_summary(client, context: str):
     except Exception as e:
         return None, f"OpenAI 要約エラー: {e}"
 
+
 # -------------------------
 # HTML カード
 # -------------------------
 def render_card(h, score, summary):
     return f"""
 <div style="border:1px solid #ccc; padding:10px; margin:10px; border-radius:8px;">
-  <h3>{h["horse_name"]}（{h["jockey"]}）</h3>
+  <h3>{h["horse_name"]}（{h.get("jockey", "")}）</h3>
+  <p><b>枠番:</b> {h.get("waku", "")} / <b>馬番:</b> {h.get("umaban", "")}</p>
   <p><b>調子スコア:</b> {score}</p>
   <p>{summary}</p>
 </div>
@@ -612,25 +730,24 @@ def wrap_html(race_id, body):
 # =========================================================
 # process_past 本体（安全版）
 # =========================================================
-@app.route(route="process_past")
 def process_past(req: func.HttpRequest) -> func.HttpResponse:
-
     url = req.params.get("url")
     if not url:
         return func.HttpResponse("url パラメータが必要です", status_code=400)
 
     race_id = extract_race_id(url)
 
-    # 出馬表取得
+    # 出馬表（shutuba_past.html）取得
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         html = requests.get(url, headers=headers, timeout=10).content
-        table = extract_shutuba_table(html)
-        horses = parse_shutuba_table(table)
+        table = extract_shutuba_table_with_links(html)
+        if table is None:
+            return func.HttpResponse("出馬表テーブルが見つかりませんでした", status_code=500)
+        horses = parse_shutuba_table_with_links(table)
     except Exception as e:
         return func.HttpResponse(f"出馬表取得エラー: {e}", status_code=500)
 
-    # OpenAI クライアント
     client, err = get_openai_client()
     if err:
         return func.HttpResponse(err, status_code=500)
@@ -640,23 +757,21 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
     for h in horses:
         horse_id = h["horse_id"]
 
-        # 過去走
         past_html, err = fetch_past_runs_html(horse_id)
         if err:
             result_html += render_card(h, 0, err)
             continue
 
-        past_table, err = extract_past_table(past_html)
-        if err or past_table is None:
-            result_html += render_card(h, 0, f"過去走テーブルなし: {err}")
+        past_table = extract_past_table_from_ajax(past_html)
+        if past_table is None:
+            result_html += render_card(h, 0, "過去走テーブルなし")
             continue
 
-        past_runs, err = parse_past_5runs(past_table)
-        if err:
-            result_html += render_card(h, 0, err)
+        past_runs = parse_past_5runs_for_condition(past_table)
+        if not past_runs:
+            result_html += render_card(h, 0, "過去走データなし")
             continue
 
-        # 特徴量
         features, err = extract_features(past_runs)
         if err:
             result_html += render_card(h, 0, err)
@@ -664,19 +779,20 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
 
         score = calc_condition_score(features)
 
-        # 血統
         pedigree, err = fetch_pedigree_text(horse_id)
         if err:
             result_html += render_card(h, score, err)
             continue
 
-        # AI 要約
-        context = json.dumps({
-            "horse": h,
-            "past_runs": past_runs,
-            "features": features,
-            "pedigree": pedigree
-        }, ensure_ascii=False)
+        context = json.dumps(
+            {
+                "horse": h,
+                "past_runs": past_runs,
+                "features": features,
+                "pedigree": pedigree,
+            },
+            ensure_ascii=False,
+        )
 
         summary, err = generate_summary(client, context)
         if err:
@@ -687,5 +803,4 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
 
     full_html = wrap_html(race_id, result_html)
     return func.HttpResponse(full_html, mimetype="text/html")
-
 

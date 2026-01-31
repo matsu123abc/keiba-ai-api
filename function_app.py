@@ -313,37 +313,3 @@ def ranking(req: func.HttpRequest) -> func.HttpResponse:
         mimetype="application/json"
     )
 
-# =========================================================
-# process_past（調子分析 + AI要約）
-# =========================================================
-
-@app.route(route="process_past")
-def process_past(req: func.HttpRequest) -> func.HttpResponse:
-    url = req.params.get("url")
-    if not url:
-        return func.HttpResponse("url パラメータが必要です", status_code=400)
-
-    race_id = extract_race_id(url)
-
-    # 出馬表取得
-    headers = {"User-Agent": "Mozilla/5.0"}
-    html = requests.get(url, headers=headers, timeout=10).content
-    table = extract_shutuba_table(html)
-    horses = parse_shutuba_table(table)
-
-    # デバッグ用：OpenAI を使わず、馬名だけを返す
-    simple_list = [h["horse_name"] for h in horses]
-
-    html_body = "<br>".join(simple_list)
-    html = f"""
-    <html>
-    <head><meta charset="UTF-8"></head>
-    <body>
-    <h2>process_past デバッグ版（race_id: {race_id}）</h2>
-    {html_body}
-    </body>
-    </html>
-    """
-
-    return func.HttpResponse(html, mimetype="text/html")
-

@@ -315,18 +315,19 @@ def ranking(req: func.HttpRequest) -> func.HttpResponse:
 
 # =========================================================
 # process_past（調子分析 + AI要約）安全版
-# shutuba_past.html + Ajax 過去走 + 列名マッピング対応
-# Azure Functions 用 main(req) エントリーポイント
+# Azure Functions v2（app.route）対応 完全版
 # =========================================================
 
 import os
 import json
-from typing import List, Dict, Optional
+from typing import List, Dict
 
 import requests
 from bs4 import BeautifulSoup
 import azure.functions as func
 
+# Azure Functions v2 のアプリ本体
+app = func.FunctionApp()
 
 # =========================================================
 # OpenAI import の安全化
@@ -367,7 +368,7 @@ def extract_race_id(url: str) -> str:
             qs = parse_qs(urlparse(url).query)
             if "race_id" in qs and qs["race_id"]:
                 return qs["race_id"][0]
-        except Exception:
+        except:
             pass
 
     import re
@@ -379,7 +380,7 @@ def extract_race_id(url: str) -> str:
 
 
 # =========================================================
-# 出馬表（shutuba_past.html）→ 馬名・horse_id・枠・馬番・騎手
+# 出馬表（shutuba_past.html）
 # =========================================================
 def extract_shutuba_table_with_links(html_bytes):
     soup = BeautifulSoup(html_bytes, "lxml")
@@ -636,14 +637,6 @@ def generate_summary(client, context: str):
 以下のデータ（過去走・特徴量・血統）を基に、
 競走馬の「強み」「弱み」「適性」を200字以内で要約してください。
 
-【要約ルール】
-- 競馬ファンが読んで納得する専門的な視点で書く
-- 過去走は「順位」「人気」「着差」「レースレベル」から調子を判断
-- 血統は「父系」「母系」「距離適性」「馬場適性」を中心に評価
-- 強み・弱み・適性を必ず分けて記述
-- 曖昧な表現は禁止
-- 200字以内で簡潔にまとめる
-
 【出力フォーマット】
 {{
   "strong": "...",
@@ -701,9 +694,11 @@ def wrap_html(race_id, body):
 
 
 # =========================================================
-# Azure Functions エントリーポイント（main）
+# Azure Functions v2 エントリーポイント
 # =========================================================
-def main(req: func.HttpRequest) -> func.HttpResponse:
+@app.route(route="process_past")
+def process_past(req: func.HttpRequest) -> func.HttpResponse:
+
     url = req.params.get("url")
     if not url:
         return func.HttpResponse("url パラメータが必要です", status_code=400)

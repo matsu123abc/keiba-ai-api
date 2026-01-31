@@ -556,11 +556,11 @@ def generate_summary(client, context: str):
 - 200字以内で簡潔にまとめる
 
 【出力フォーマット】
-{
+{{
   "strong": "...",
   "weak": "...",
   "suitability": "..."
-}
+}}
 
 【解析対象データ】
 {context}
@@ -577,7 +577,6 @@ def generate_summary(client, context: str):
 
     except Exception as e:
         return None, f"OpenAI 要約エラー: {e}"
-
 
 # -------------------------
 # HTML カード

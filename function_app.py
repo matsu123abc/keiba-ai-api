@@ -460,17 +460,38 @@ def fetch_pedigree_text(horse_id: str):
 def generate_summary(client, context: str):
     try:
         prompt = f"""
-以下は競走馬の過去走データと血統情報です。
-これを基に、競走馬の特徴・強み・弱み・適性を200字以内で要約してください。
+あなたは競馬の専門アナリストです。
+以下のデータ（過去走・特徴量・血統）を基に、
+競走馬の「強み」「弱み」「適性」を200字以内で要約してください。
 
+【要約ルール】
+- 競馬ファンが読んで納得する専門的な視点で書く
+- 過去走は「順位」「人気」「着差」「レースレベル」から調子を判断
+- 血統は「父系」「母系」「距離適性」「馬場適性」を中心に評価
+- 強み・弱み・適性を必ず分けて記述
+- 曖昧な表現は禁止（例：まあまあ、そこそこ、普通）
+- 200字以内で簡潔にまとめる
+
+【出力フォーマット】
+{
+  "strong": "...",
+  "weak": "...",
+  "suitability": "..."
+}
+
+【解析対象データ】
 {context}
 """
+
         res = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=300
+            max_tokens=300,
+            temperature=0.4
         )
+
         return res.choices[0].message.content, None
+
     except Exception as e:
         return None, f"OpenAI 要約エラー: {e}"
 

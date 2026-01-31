@@ -2,3 +2,8 @@ azure-functions
 requests
 beautifulsoup4
 lxml
+azure-functions
+requests
+beautifulsoup4
+lxml
+openai

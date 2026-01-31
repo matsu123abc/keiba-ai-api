@@ -314,7 +314,9 @@ def ranking(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 # =========================================================
-# process_past（調子分析 + AI要約）安全版（shutuba_past + Ajax 過去走対応）
+# process_past（調子分析 + AI要約）安全版
+# shutuba_past.html + Ajax 過去走 + 列名マッピング対応
+# Azure Functions 用 main(req) エントリーポイント
 # =========================================================
 
 import os
@@ -325,9 +327,10 @@ import requests
 from bs4 import BeautifulSoup
 import azure.functions as func
 
-# -------------------------
+
+# =========================================================
 # OpenAI import の安全化
-# -------------------------
+# =========================================================
 try:
     from openai import AzureOpenAI
     openai_import_error = None
@@ -336,9 +339,9 @@ except Exception as e:
     openai_import_error = str(e)
 
 
-# -------------------------
-# OpenAI クライアント生成（安全化）
-# -------------------------
+# =========================================================
+# OpenAI クライアント生成
+# =========================================================
 def get_openai_client():
     if AzureOpenAI is None:
         return None, f"OpenAI import エラー: {openai_import_error}"
@@ -358,7 +361,6 @@ def get_openai_client():
 # race_id 抽出
 # =========================================================
 def extract_race_id(url: str) -> str:
-    # クエリから race_id を優先的に取得
     if "race_id=" in url:
         try:
             from urllib.parse import urlparse, parse_qs
@@ -368,7 +370,6 @@ def extract_race_id(url: str) -> str:
         except Exception:
             pass
 
-    # フォールバック：数字12桁を末尾から拾う
     import re
     m = re.search(r"(\d{12})", url)
     if m:
@@ -380,7 +381,7 @@ def extract_race_id(url: str) -> str:
 # =========================================================
 # 出馬表（shutuba_past.html）→ 馬名・horse_id・枠・馬番・騎手
 # =========================================================
-def extract_shutuba_table_with_links(html_bytes: bytes):
+def extract_shutuba_table_with_links(html_bytes):
     soup = BeautifulSoup(html_bytes, "lxml")
 
     table = soup.find("table", class_="RaceTable01 RaceTable01-HorseList")
@@ -398,7 +399,7 @@ def extract_shutuba_table_with_links(html_bytes: bytes):
     return None
 
 
-def parse_shutuba_table_with_links(table) -> List[Dict]:
+def parse_shutuba_table_with_links(table):
     rows = table.find_all("tr")[1:]
     horses = []
 
@@ -417,17 +418,14 @@ def parse_shutuba_table_with_links(table) -> List[Dict]:
         horse_id = None
         jockey = ""
 
-        # 馬名・horse_id
         for c in cols:
             a = c.find("a")
             href = (a.get("href") or "") if a else ""
             if "horse" in href:
                 horse_name = a.get_text(strip=True)
-                horse_url = href
-                horse_id = horse_url.rstrip("/").split("/")[-1]
+                horse_id = href.rstrip("/").split("/")[-1]
                 break
 
-        # 騎手名
         for c in cols:
             a = c.find("a")
             href = (a.get("href") or "") if a else ""
@@ -450,7 +448,7 @@ def parse_shutuba_table_with_links(table) -> List[Dict]:
 
 
 # =========================================================
-# 過去走テーブル（Ajax エンドポイント）
+# Ajax 過去走取得
 # =========================================================
 def fetch_past_runs_html(horse_id: str):
     url = f"https://db.netkeiba.com/horse/ajax_horse_results.html?id={horse_id}"
@@ -468,8 +466,7 @@ def fetch_past_runs_html(horse_id: str):
         res = requests.get(url, headers=headers, timeout=10)
         res.raise_for_status()
 
-        # EUC-JP を明示
-        res.encoding = "euc-jp"
+        res.encoding = "euc-jp"  # ★超重要
 
         return res.text, None
     except Exception as e:
@@ -481,7 +478,7 @@ def extract_past_table_from_ajax(html_text: str):
     return soup.find("table")
 
 
-def parse_past_5runs_for_condition(table) -> List[Dict]:
+def parse_past_5runs_for_condition(table):
     rows = table.find_all("tr")
     if len(rows) <= 1:
         return []
@@ -523,47 +520,35 @@ def parse_past_5runs_for_condition(table) -> List[Dict]:
     return past_runs
 
 
-# -------------------------
+# =========================================================
 # 特徴量抽出
-# -------------------------
+# =========================================================
 def extract_features(past_runs):
     try:
         ranks, pops, margins = [], [], []
-        agari_list = []          # 上がり順位
-        race_levels = []         # レースレベル
-        distance_fit_list = []   # 距離適性
-        baba_fit_list = []       # 馬場適性
+        agari_list = []
+        race_levels = []
+        distance_fit_list = []
+        baba_fit_list = []
 
         def get_race_level(name):
-            if "G1" in name:
-                return 6
-            if "G2" in name:
-                return 5
-            if "G3" in name:
-                return 4
-            if "OP" in name:
-                return 3
-            if "3勝" in name:
-                return 2
-            if "2勝" in name:
-                return 1
+            if "G1" in name: return 6
+            if "G2" in name: return 5
+            if "G3" in name: return 4
+            if "OP" in name: return 3
+            if "3勝" in name: return 2
+            if "2勝" in name: return 1
             return 0
 
         def parse_distance(s):
-            try:
-                return int(s.replace("m", "").strip())
-            except Exception:
-                return None
+            try: return int(s.replace("m", "").strip())
+            except: return None
 
         def parse_baba(s):
-            if "良" in s:
-                return "良"
-            if "稍" in s:
-                return "稍重"
-            if "重" in s:
-                return "重"
-            if "不" in s:
-                return "不良"
+            if "良" in s: return "良"
+            if "稍" in s: return "稍重"
+            if "重" in s: return "重"
+            if "不" in s: return "不良"
             return None
 
         last_distance = None
@@ -574,46 +559,37 @@ def extract_features(past_runs):
             last_baba = parse_baba(past_runs[0].get("baba", ""))
 
         for r in past_runs:
-            try:
-                ranks.append(int(r.get("rank", "")))
-            except Exception:
-                pass
-            try:
-                pops.append(int(r.get("pop", "")))
-            except Exception:
-                pass
-            try:
-                margins.append(float(r.get("margin", "")))
-            except Exception:
-                pass
+            try: ranks.append(int(r.get("rank", "")))
+            except: pass
+            try: pops.append(int(r.get("pop", "")))
+            except: pass
+            try: margins.append(float(r.get("margin", "")))
+            except: pass
 
             try:
                 agari = int(r.get("agari", ""))
                 agari_list.append(agari)
-            except Exception:
+            except:
                 pass
 
             race_levels.append(get_race_level(r.get("race_name", "")))
 
             dist = parse_distance(r.get("distance", ""))
             if dist and last_distance:
-                if dist > last_distance:
-                    distance_fit_list.append(1)
-                elif dist < last_distance:
-                    distance_fit_list.append(-1)
-                else:
-                    distance_fit_list.append(0)
+                if dist > last_distance: distance_fit_list.append(1)
+                elif dist < last_distance: distance_fit_list.append(-1)
+                else: distance_fit_list.append(0)
 
             baba = parse_baba(r.get("baba", ""))
             if baba and last_baba:
                 baba_fit_list.append(1 if baba == last_baba else 0)
 
         return {
-            "avg_rank": sum(ranks) / len(ranks) if ranks else 99,
-            "avg_pop": sum(pops) / len(pops) if pops else 99,
-            "avg_margin": sum(margins) / len(margins) if margins else 9.9,
-            "avg_agari": sum(agari_list) / len(agari_list) if agari_list else 99,
-            "avg_race_level": sum(race_levels) / len(race_levels) if race_levels else 0,
+            "avg_rank": sum(ranks)/len(ranks) if ranks else 99,
+            "avg_pop": sum(pops)/len(pops) if pops else 99,
+            "avg_margin": sum(margins)/len(margins) if margins else 9.9,
+            "avg_agari": sum(agari_list)/len(agari_list) if agari_list else 99,
+            "avg_race_level": sum(race_levels)/len(race_levels) if race_levels else 0,
             "distance_fit": sum(distance_fit_list) if distance_fit_list else 0,
             "baba_fit": sum(baba_fit_list) if baba_fit_list else 0
         }, None
@@ -622,27 +598,24 @@ def extract_features(past_runs):
         return None, f"特徴量抽出エラー: {e}"
 
 
-# -------------------------
+# =========================================================
 # 調子スコア
-# -------------------------
+# =========================================================
 def calc_condition_score(f):
     score = 100
-
     score -= f["avg_rank"] * 2
     score -= f["avg_pop"] * 1.5
     score -= f["avg_margin"] * 5
-
     score -= f["avg_agari"] * 1.2
     score += f["avg_race_level"] * 3
     score += f["distance_fit"] * 5
     score += f["baba_fit"] * 4
-
     return max(0, min(100, round(score, 2)))
 
 
-# -------------------------
+# =========================================================
 # 血統テキスト取得
-# -------------------------
+# =========================================================
 def fetch_pedigree_text(horse_id: str):
     try:
         url = f"https://db.netkeiba.com/horse/ped/{horse_id}/"
@@ -653,9 +626,9 @@ def fetch_pedigree_text(horse_id: str):
         return None, f"血統取得エラー: {e}"
 
 
-# -------------------------
+# =========================================================
 # LLM 要約
-# -------------------------
+# =========================================================
 def generate_summary(client, context: str):
     try:
         prompt = f"""
@@ -668,7 +641,7 @@ def generate_summary(client, context: str):
 - 過去走は「順位」「人気」「着差」「レースレベル」から調子を判断
 - 血統は「父系」「母系」「距離適性」「馬場適性」を中心に評価
 - 強み・弱み・適性を必ず分けて記述
-- 曖昧な表現は禁止（例：まあまあ、そこそこ、普通）
+- 曖昧な表現は禁止
 - 200字以内で簡潔にまとめる
 
 【出力フォーマット】
@@ -695,9 +668,9 @@ def generate_summary(client, context: str):
         return None, f"OpenAI 要約エラー: {e}"
 
 
-# -------------------------
+# =========================================================
 # HTML カード
-# -------------------------
+# =========================================================
 def render_card(h, score, summary):
     return f"""
 <div style="border:1px solid #ccc; padding:10px; margin:10px; border-radius:8px;">
@@ -709,9 +682,9 @@ def render_card(h, score, summary):
 """
 
 
-# -------------------------
+# =========================================================
 # HTML 全体
-# -------------------------
+# =========================================================
 def wrap_html(race_id, body):
     return f"""
 <html>
@@ -728,16 +701,16 @@ def wrap_html(race_id, body):
 
 
 # =========================================================
-# process_past 本体（安全版）
+# Azure Functions エントリーポイント（main）
 # =========================================================
-def process_past(req: func.HttpRequest) -> func.HttpResponse:
+def main(req: func.HttpRequest) -> func.HttpResponse:
     url = req.params.get("url")
     if not url:
         return func.HttpResponse("url パラメータが必要です", status_code=400)
 
     race_id = extract_race_id(url)
 
-    # 出馬表（shutuba_past.html）取得
+    # 出馬表取得
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         html = requests.get(url, headers=headers, timeout=10).content
@@ -803,4 +776,3 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
 
     full_html = wrap_html(race_id, result_html)
     return func.HttpResponse(full_html, mimetype="text/html")
-

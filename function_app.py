@@ -317,145 +317,6 @@ def ranking(req: func.HttpRequest) -> func.HttpResponse:
 # process_past（調子分析 + AI要約）
 # =========================================================
 
-from openai import AzureOpenAI
-import os
-
-# Azure OpenAI クライアント
-client = AzureOpenAI(
-    api_key=os.environ["AZURE_OPENAI_API_KEY"],
-    api_version="2024-02-01",
-    azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"]
-)
-
-# -------------------------
-# 過去走 Ajax 取得
-# -------------------------
-def fetch_past_runs_html(horse_id: str) -> bytes:
-    url = f"https://db.netkeiba.com/horse/ajax/{horse_id}/"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    res = requests.get(url, headers=headers, timeout=10)
-    res.raise_for_status()
-    return res.content
-
-# -------------------------
-# 過去走テーブル抽出
-# -------------------------
-def extract_past_table(html_bytes: bytes):
-    soup = BeautifulSoup(html_bytes, "lxml")
-    return soup.find("table")
-
-# -------------------------
-# 過去5走パース
-# -------------------------
-def parse_past_5runs(table):
-    rows = table.find_all("tr")[1:6]
-    results = []
-
-    for tr in rows:
-        tds = tr.find_all("td")
-        if len(tds) < 10:
-            continue
-
-        results.append({
-            "date": tds[0].text.strip(),
-            "race_name": tds[4].text.strip(),
-            "rank": tds[11].text.strip(),
-            "time": tds[12].text.strip(),
-            "margin": tds[13].text.strip(),
-            "pop": tds[14].text.strip(),
-            "odds": tds[15].text.strip()
-        })
-
-    return results
-
-# -------------------------
-# 特徴量抽出
-# -------------------------
-def extract_features(past_runs):
-    ranks, pops, margins = [], [], []
-
-    for r in past_runs:
-        try: ranks.append(int(r["rank"]))
-        except: pass
-        try: pops.append(int(r["pop"]))
-        except: pass
-        try: margins.append(float(r["margin"]))
-        except: pass
-
-    return {
-        "avg_rank": sum(ranks)/len(ranks) if ranks else 99,
-        "avg_pop": sum(pops)/len(pops) if pops else 99,
-        "avg_margin": sum(margins)/len(margins) if margins else 9.9
-    }
-
-# -------------------------
-# 調子スコア
-# -------------------------
-def calc_condition_score(f):
-    score = 100
-    score -= f["avg_rank"] * 2
-    score -= f["avg_pop"] * 1.5
-    score -= f["avg_margin"] * 5
-    return max(0, min(100, score))
-
-# -------------------------
-# 血統テキスト取得
-# -------------------------
-def fetch_pedigree_text(horse_id: str) -> str:
-    url = f"https://db.netkeiba.com/horse/ped/{horse_id}/"
-    html = requests.get(url, timeout=10).content
-    soup = BeautifulSoup(html, "lxml")
-    return soup.get_text(" ", strip=True)
-
-# -------------------------
-# LLM 要約
-# -------------------------
-def generate_summary(context: str) -> str:
-    prompt = f"""
-以下は競走馬の過去走データと血統情報です。
-これを基に、競走馬の特徴・強み・弱み・適性を200字以内で要約してください。
-
-{context}
-"""
-    res = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=300
-    )
-    return res.choices[0].message.content
-
-# -------------------------
-# HTML カード
-# -------------------------
-def render_card(h, score, summary):
-    return f"""
-<div style="border:1px solid #ccc; padding:10px; margin:10px; border-radius:8px;">
-  <h3>{h["horse_name"]}（{h["jockey"]}）</h3>
-  <p><b>調子スコア:</b> {score}</p>
-  <p>{summary}</p>
-</div>
-"""
-
-# -------------------------
-# HTML 全体
-# -------------------------
-def wrap_html(race_id, body):
-    return f"""
-<html>
-<head>
-<meta charset="UTF-8">
-<title>調子分析 {race_id}</title>
-</head>
-<body>
-<h2>調子分析レポート（race_id: {race_id}）</h2>
-{body}
-</body>
-</html>
-"""
-
-# -------------------------
-# process_past 本体
-# -------------------------
 @app.route(route="process_past")
 def process_past(req: func.HttpRequest) -> func.HttpResponse:
     url = req.params.get("url")
@@ -470,30 +331,19 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
     table = extract_shutuba_table(html)
     horses = parse_shutuba_table(table)
 
-    result_html = ""
+    # デバッグ用：OpenAI を使わず、馬名だけを返す
+    simple_list = [h["horse_name"] for h in horses]
 
-    for h in horses:
-        horse_id = h["horse_id"]
+    html_body = "<br>".join(simple_list)
+    html = f"""
+    <html>
+    <head><meta charset="UTF-8"></head>
+    <body>
+    <h2>process_past デバッグ版（race_id: {race_id}）</h2>
+    {html_body}
+    </body>
+    </html>
+    """
 
-        past_html = fetch_past_runs_html(horse_id)
-        past_table = extract_past_table(past_html)
-        past_runs = parse_past_5runs(past_table)
+    return func.HttpResponse(html, mimetype="text/html")
 
-        features = extract_features(past_runs)
-        score = calc_condition_score(features)
-
-        pedigree = fetch_pedigree_text(horse_id)
-
-        context = json.dumps({
-            "horse": h,
-            "past_runs": past_runs,
-            "features": features,
-            "pedigree": pedigree
-        }, ensure_ascii=False)
-
-        summary = generate_summary(context)
-
-        result_html += render_card(h, score, summary)
-
-    full_html = wrap_html(race_id, result_html)
-    return func.HttpResponse(full_html, mimetype="text/html")

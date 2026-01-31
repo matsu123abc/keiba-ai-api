@@ -4,16 +4,31 @@ import json
 import requests
 from bs4 import BeautifulSoup
 import re
+import os
+from typing import List, Dict
 
+# =========================================================
+# Azure Functions v2 FunctionApp（1つだけ）
+# =========================================================
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
-# -------------------------
-# 補助関数
-# -------------------------
+# =========================================================
+# 共通：race_id 抽出
+# =========================================================
 def extract_race_id(url: str):
     m = re.search(r"race_id=(\d{12,13})", url)
-    return m.group(1) if m else None
+    if m:
+        return m.group(1)
 
+    m = re.search(r"(\d{12})", url)
+    if m:
+        return m.group(1)
+
+    return None
+
+# =========================================================
+# 共通：出馬表（shutuba_past.html）
+# =========================================================
 def extract_shutuba_table(html_bytes: bytes):
     soup = BeautifulSoup(html_bytes, "lxml")
 
@@ -26,6 +41,7 @@ def extract_shutuba_table(html_bytes: bytes):
         return table
 
     return None
+
 
 def parse_shutuba_table(table):
     rows = table.find_all("tr")[1:]
@@ -68,9 +84,9 @@ def parse_shutuba_table(table):
 
     return horses
 
-# -------------------------
-# shutuba 関数（最小構成）
-# -------------------------
+# =========================================================
+# shutuba 関数
+# =========================================================
 @app.route(route="shutuba")
 def shutuba(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("shutuba function triggered")
@@ -118,9 +134,9 @@ def shutuba(req: func.HttpRequest) -> func.HttpResponse:
         mimetype="application/json"
     )
 
-# -------------------------
+# =========================================================
 # scoring 関数
-# -------------------------
+# =========================================================
 @app.route(route="scoring")
 def scoring(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("scoring function triggered")
@@ -147,20 +163,14 @@ def scoring(req: func.HttpRequest) -> func.HttpResponse:
     for h in horses:
         score = 0
 
-        # -------------------------
-        # ① 枠順スコア（1〜8枠）
-        # -------------------------
+        # 枠順
         try:
             waku = int(h.get("waku", 0))
-            # 内枠有利（例：1枠=+20、8枠=+5）
-            waku_score = max(5, 25 - waku * 3)
-            score += waku_score
+            score += max(5, 25 - waku * 3)
         except:
             pass
 
-        # -------------------------
-        # ② 騎手スコア（簡易）
-        # -------------------------
+        # 騎手
         jockey = h.get("jockey", "")
         jockey_score_map = {
             "川田": 25, "ルメール": 25, "戸崎": 20, "横山武": 20,
@@ -171,56 +181,41 @@ def scoring(req: func.HttpRequest) -> func.HttpResponse:
                 score += val
                 break
 
-        # -------------------------
-        # ③ 斤量スコア（軽いほど有利）
-        # -------------------------
+        # 斤量
         try:
             weight = float(h.get("weight", "0").replace("kg", "").strip())
-            # 55kg を基準に、1kg 重いごとに -1.5
             score += max(0, 20 - (weight - 55) * 1.5)
         except:
             pass
 
-        # -------------------------
-        # ④ オッズスコア（人気馬を加点）
-        # -------------------------
+        # オッズ
         odds = h.get("odds")
         if odds:
             try:
                 odds_val = float(odds)
-                # 1番人気（1.0〜2.0）なら +25、10倍なら +5
-                odds_score = max(0, 30 - odds_val * 2)
-                score += odds_score
+                score += max(0, 30 - odds_val * 2)
             except:
                 pass
 
-        # -------------------------
-        # ⑤ 馬番スコア（軽量）
-        # -------------------------
+        # 馬番
         try:
             umaban = int(h.get("umaban", 0))
             score += max(0, 15 - umaban * 0.5)
         except:
             pass
 
-        # -------------------------
-        # 最終スコア（0〜100に丸める）
-        # -------------------------
         score = max(0, min(100, round(score, 2)))
 
-        scored.append({
-            **h,
-            "score": score
-        })
+        scored.append({**h, "score": score})
 
     return func.HttpResponse(
         json.dumps({"horses": scored}, ensure_ascii=False),
         mimetype="application/json"
     )
 
-# -------------------------
+# =========================================================
 # ranking 関数
-# -------------------------
+# =========================================================
 @app.route(route="ranking")
 def ranking(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("ranking function triggered")
@@ -245,22 +240,16 @@ def ranking(req: func.HttpRequest) -> func.HttpResponse:
     ranked = []
 
     for h in horses:
-        base_score = h.get("score", 0)
-        total = base_score
+        total = h.get("score", 0)
 
-        # -------------------------
-        # ① 枠順補正（1枠が最も有利）
-        # -------------------------
+        # 枠順補正
         try:
             waku = int(h.get("waku", 0))
-            waku_bonus = max(0, 10 - (waku - 1) * 1.2)
-            total += waku_bonus
+            total += max(0, 10 - (waku - 1) * 1.2)
         except:
             pass
 
-        # -------------------------
-        # ② 騎手補正（scoring と同じ基準）
-        # -------------------------
+        # 騎手補正
         jockey = h.get("jockey", "")
         jockey_score_map = {
             "川田": 8, "ルメール": 8, "戸崎": 6, "横山武": 6,
@@ -271,41 +260,24 @@ def ranking(req: func.HttpRequest) -> func.HttpResponse:
                 total += val
                 break
 
-        # -------------------------
-        # ③ オッズ補正（人気馬を加点）
-        # -------------------------
+        # オッズ補正
         odds = h.get("odds")
         if odds:
             try:
                 odds_val = float(odds)
-                odds_bonus = max(0, 15 - odds_val * 1.5)
-                total += odds_bonus
+                total += max(0, 15 - odds_val * 1.5)
             except:
                 pass
 
-        # -------------------------
-        # ④ 馬番補正（内寄りが有利）
-        # -------------------------
+        # 馬番補正
         try:
             umaban = int(h.get("umaban", 0))
-            umaban_bonus = max(0, 8 - umaban * 0.3)
-            total += umaban_bonus
+            total += max(0, 8 - umaban * 0.3)
         except:
             pass
 
-        # -------------------------
-        # 最終スコア
-        # -------------------------
-        total = round(total, 2)
+        ranked.append({**h, "ranking_score": round(total, 2)})
 
-        ranked.append({
-            **h,
-            "ranking_score": total
-        })
-
-    # -------------------------
-    # 降順で並べ替え
-    # -------------------------
     ranked_sorted = sorted(ranked, key=lambda x: x["ranking_score"], reverse=True)
 
     return func.HttpResponse(
@@ -314,24 +286,10 @@ def ranking(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 # =========================================================
-# process_past（調子分析 + AI要約）安全版
-# Azure Functions v2（app.route）対応 完全版
+# process_past（調子分析 + AI要約）
 # =========================================================
 
-import os
-import json
-from typing import List, Dict
-
-import requests
-from bs4 import BeautifulSoup
-import azure.functions as func
-
-# Azure Functions v2 のアプリ本体
-app = func.FunctionApp()
-
-# =========================================================
-# OpenAI import の安全化
-# =========================================================
+# OpenAI import
 try:
     from openai import AzureOpenAI
     openai_import_error = None
@@ -340,9 +298,6 @@ except Exception as e:
     openai_import_error = str(e)
 
 
-# =========================================================
-# OpenAI クライアント生成
-# =========================================================
 def get_openai_client():
     if AzureOpenAI is None:
         return None, f"OpenAI import エラー: {openai_import_error}"
@@ -358,30 +313,7 @@ def get_openai_client():
         return None, f"OpenAI クライアント初期化エラー: {e}"
 
 
-# =========================================================
-# race_id 抽出
-# =========================================================
-def extract_race_id(url: str) -> str:
-    if "race_id=" in url:
-        try:
-            from urllib.parse import urlparse, parse_qs
-            qs = parse_qs(urlparse(url).query)
-            if "race_id" in qs and qs["race_id"]:
-                return qs["race_id"][0]
-        except:
-            pass
-
-    import re
-    m = re.search(r"(\d{12})", url)
-    if m:
-        return m.group(1)
-
-    return "unknown"
-
-
-# =========================================================
-# 出馬表（shutuba_past.html）
-# =========================================================
+# 出馬表（process_past 用）
 def extract_shutuba_table_with_links(html_bytes):
     soup = BeautifulSoup(html_bytes, "lxml")
 
@@ -448,9 +380,7 @@ def parse_shutuba_table_with_links(table):
     return horses
 
 
-# =========================================================
-# Ajax 過去走取得
-# =========================================================
+# Ajax 過去走
 def fetch_past_runs_html(horse_id: str):
     url = f"https://db.netkeiba.com/horse/ajax_horse_results.html?id={horse_id}"
     try:
@@ -467,7 +397,7 @@ def fetch_past_runs_html(horse_id: str):
         res = requests.get(url, headers=headers, timeout=10)
         res.raise_for_status()
 
-        res.encoding = "euc-jp"  # ★超重要
+        res.encoding = "euc-jp"
 
         return res.text, None
     except Exception as e:
@@ -521,9 +451,7 @@ def parse_past_5runs_for_condition(table):
     return past_runs
 
 
-# =========================================================
 # 特徴量抽出
-# =========================================================
 def extract_features(past_runs):
     try:
         ranks, pops, margins = [], [], []
@@ -599,9 +527,6 @@ def extract_features(past_runs):
         return None, f"特徴量抽出エラー: {e}"
 
 
-# =========================================================
-# 調子スコア
-# =========================================================
 def calc_condition_score(f):
     score = 100
     score -= f["avg_rank"] * 2
@@ -614,9 +539,6 @@ def calc_condition_score(f):
     return max(0, min(100, round(score, 2)))
 
 
-# =========================================================
-# 血統テキスト取得
-# =========================================================
 def fetch_pedigree_text(horse_id: str):
     try:
         url = f"https://db.netkeiba.com/horse/ped/{horse_id}/"
@@ -627,9 +549,6 @@ def fetch_pedigree_text(horse_id: str):
         return None, f"血統取得エラー: {e}"
 
 
-# =========================================================
-# LLM 要約
-# =========================================================
 def generate_summary(client, context: str):
     try:
         prompt = f"""
@@ -661,9 +580,6 @@ def generate_summary(client, context: str):
         return None, f"OpenAI 要約エラー: {e}"
 
 
-# =========================================================
-# HTML カード
-# =========================================================
 def render_card(h, score, summary):
     return f"""
 <div style="border:1px solid #ccc; padding:10px; margin:10px; border-radius:8px;">
@@ -675,9 +591,6 @@ def render_card(h, score, summary):
 """
 
 
-# =========================================================
-# HTML 全体
-# =========================================================
 def wrap_html(race_id, body):
     return f"""
 <html>
@@ -693,9 +606,6 @@ def wrap_html(race_id, body):
 """
 
 
-# =========================================================
-# Azure Functions v2 エントリーポイント
-# =========================================================
 @app.route(route="process_past")
 def process_past(req: func.HttpRequest) -> func.HttpResponse:
 
@@ -705,7 +615,6 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
 
     race_id = extract_race_id(url)
 
-    # 出馬表取得
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         html = requests.get(url, headers=headers, timeout=10).content

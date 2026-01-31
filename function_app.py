@@ -313,73 +313,276 @@ def ranking(req: func.HttpRequest) -> func.HttpResponse:
         mimetype="application/json"
     )
 
-import os
-import azure.functions as func
-import requests
 
-# --- OpenAI import の安全化（ステップ5） ---
+# =========================================================
+# process_past（調子分析 + AI要約）安全版
+# =========================================================
+
+import os
+import json
+import requests
+from bs4 import BeautifulSoup
+import azure.functions as func
+
+# -------------------------
+# OpenAI import の安全化
+# -------------------------
 try:
     from openai import AzureOpenAI
-    openai_available = True
     openai_import_error = None
 except Exception as e:
     AzureOpenAI = None
-    openai_available = False
     openai_import_error = str(e)
 
 
-@app.route(route="process_past")
-def process_past(req: func.HttpRequest) -> func.HttpResponse:
-    url = req.params.get("url")
+# -------------------------
+# OpenAI クライアント生成（安全化）
+# -------------------------
+def get_openai_client():
+    if AzureOpenAI is None:
+        return None, f"OpenAI import エラー: {openai_import_error}"
 
-    # URL が無い場合
-    if not url:
-        return func.HttpResponse("url パラメータが必要です", status_code=400)
-
-    # --- HTML 取得 ---
-    try:
-        res = requests.get(url, timeout=10)
-        res.raise_for_status()
-        html_bytes = res.content
-    except Exception as e:
-        return func.HttpResponse(
-            f"HTML取得エラー: {e}",
-            status_code=500
-        )
-
-    # --- OpenAI import エラー時 ---
-    if not openai_available:
-        return func.HttpResponse(
-            f"OpenAI import エラー: {openai_import_error}",
-            status_code=500
-        )
-
-    # --- OpenAI 呼び出し（ステップ6） ---
     try:
         client = AzureOpenAI(
             api_key=os.environ.get("AZURE_OPENAI_API_KEY"),
-            azure_endpoint=os.environ.get("AZURE_OPENAI_ENDPOINT"),
-            api_version="2024-10-21"
+            api_version="2024-02-01",
+            azure_endpoint=os.environ.get("AZURE_OPENAI_ENDPOINT")
         )
-
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "HTML を解析して馬の情報を抽出してください。"},
-                {"role": "user", "content": html_bytes.decode("utf-8", errors="ignore")}
-            ]
-        )
-
-        ai_result = response.choices[0].message["content"]
-
+        return client, None
     except Exception as e:
-        return func.HttpResponse(
-            f"OpenAI 呼び出しエラー: {e}",
-            status_code=500
-        )
+        return None, f"OpenAI クライアント初期化エラー: {e}"
 
-    # --- 結果返却 ---
-    return func.HttpResponse(
-        ai_result,
-        mimetype="text/plain"
-    )
+
+# -------------------------
+# 過去走 Ajax 取得
+# -------------------------
+def fetch_past_runs_html(horse_id: str):
+    try:
+        url = f"https://db.netkeiba.com/horse/ajax/{horse_id}/"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        res = requests.get(url, headers=headers, timeout=10)
+        res.raise_for_status()
+        return res.content, None
+    except Exception as e:
+        return None, f"過去走HTML取得エラー: {e}"
+
+
+# -------------------------
+# 過去走テーブル抽出
+# -------------------------
+def extract_past_table(html_bytes: bytes):
+    try:
+        soup = BeautifulSoup(html_bytes, "lxml")
+        return soup.find("table"), None
+    except Exception as e:
+        return None, f"過去走テーブル抽出エラー: {e}"
+
+
+# -------------------------
+# 過去5走パース
+# -------------------------
+def parse_past_5runs(table):
+    try:
+        rows = table.find_all("tr")[1:6]
+        results = []
+
+        for tr in rows:
+            tds = tr.find_all("td")
+            if len(tds) < 16:
+                continue
+
+            results.append({
+                "date": tds[0].text.strip(),
+                "race_name": tds[4].text.strip(),
+                "rank": tds[11].text.strip(),
+                "time": tds[12].text.strip(),
+                "margin": tds[13].text.strip(),
+                "pop": tds[14].text.strip(),
+                "odds": tds[15].text.strip()
+            })
+
+        return results, None
+    except Exception as e:
+        return None, f"過去走パースエラー: {e}"
+
+
+# -------------------------
+# 特徴量抽出
+# -------------------------
+def extract_features(past_runs):
+    try:
+        ranks, pops, margins = [], [], []
+
+        for r in past_runs:
+            try: ranks.append(int(r["rank"]))
+            except: pass
+            try: pops.append(int(r["pop"]))
+            except: pass
+            try: margins.append(float(r["margin"]))
+            except: pass
+
+        return {
+            "avg_rank": sum(ranks)/len(ranks) if ranks else 99,
+            "avg_pop": sum(pops)/len(pops) if pops else 99,
+            "avg_margin": sum(margins)/len(margins) if margins else 9.9
+        }, None
+    except Exception as e:
+        return None, f"特徴量抽出エラー: {e}"
+
+
+# -------------------------
+# 調子スコア
+# -------------------------
+def calc_condition_score(f):
+    score = 100
+    score -= f["avg_rank"] * 2
+    score -= f["avg_pop"] * 1.5
+    score -= f["avg_margin"] * 5
+    return max(0, min(100, score))
+
+
+# -------------------------
+# 血統テキスト取得
+# -------------------------
+def fetch_pedigree_text(horse_id: str):
+    try:
+        url = f"https://db.netkeiba.com/horse/ped/{horse_id}/"
+        html = requests.get(url, timeout=10).content
+        soup = BeautifulSoup(html, "lxml")
+        return soup.get_text(" ", strip=True), None
+    except Exception as e:
+        return None, f"血統取得エラー: {e}"
+
+
+# -------------------------
+# LLM 要約
+# -------------------------
+def generate_summary(client, context: str):
+    try:
+        prompt = f"""
+以下は競走馬の過去走データと血統情報です。
+これを基に、競走馬の特徴・強み・弱み・適性を200字以内で要約してください。
+
+{context}
+"""
+        res = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=300
+        )
+        return res.choices[0].message.content, None
+    except Exception as e:
+        return None, f"OpenAI 要約エラー: {e}"
+
+
+# -------------------------
+# HTML カード
+# -------------------------
+def render_card(h, score, summary):
+    return f"""
+<div style="border:1px solid #ccc; padding:10px; margin:10px; border-radius:8px;">
+  <h3>{h["horse_name"]}（{h["jockey"]}）</h3>
+  <p><b>調子スコア:</b> {score}</p>
+  <p>{summary}</p>
+</div>
+"""
+
+
+# -------------------------
+# HTML 全体
+# -------------------------
+def wrap_html(race_id, body):
+    return f"""
+<html>
+<head>
+<meta charset="UTF-8">
+<title>調子分析 {race_id}</title>
+</head>
+<body>
+<h2>調子分析レポート（race_id: {race_id}）</h2>
+{body}
+</body>
+</html>
+"""
+
+
+# =========================================================
+# process_past 本体（安全版）
+# =========================================================
+@app.route(route="process_past")
+def process_past(req: func.HttpRequest) -> func.HttpResponse:
+
+    url = req.params.get("url")
+    if not url:
+        return func.HttpResponse("url パラメータが必要です", status_code=400)
+
+    race_id = extract_race_id(url)
+
+    # 出馬表取得
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        html = requests.get(url, headers=headers, timeout=10).content
+        table = extract_shutuba_table(html)
+        horses = parse_shutuba_table(table)
+    except Exception as e:
+        return func.HttpResponse(f"出馬表取得エラー: {e}", status_code=500)
+
+    # OpenAI クライアント
+    client, err = get_openai_client()
+    if err:
+        return func.HttpResponse(err, status_code=500)
+
+    result_html = ""
+
+    for h in horses:
+        horse_id = h["horse_id"]
+
+        # 過去走
+        past_html, err = fetch_past_runs_html(horse_id)
+        if err:
+            result_html += render_card(h, 0, err)
+            continue
+
+        past_table, err = extract_past_table(past_html)
+        if err or past_table is None:
+            result_html += render_card(h, 0, f"過去走テーブルなし: {err}")
+            continue
+
+        past_runs, err = parse_past_5runs(past_table)
+        if err:
+            result_html += render_card(h, 0, err)
+            continue
+
+        # 特徴量
+        features, err = extract_features(past_runs)
+        if err:
+            result_html += render_card(h, 0, err)
+            continue
+
+        score = calc_condition_score(features)
+
+        # 血統
+        pedigree, err = fetch_pedigree_text(horse_id)
+        if err:
+            result_html += render_card(h, score, err)
+            continue
+
+        # AI 要約
+        context = json.dumps({
+            "horse": h,
+            "past_runs": past_runs,
+            "features": features,
+            "pedigree": pedigree
+        }, ensure_ascii=False)
+
+        summary, err = generate_summary(client, context)
+        if err:
+            result_html += render_card(h, score, err)
+            continue
+
+        result_html += render_card(h, score, summary)
+
+    full_html = wrap_html(race_id, result_html)
+    return func.HttpResponse(full_html, mimetype="text/html")
+
+

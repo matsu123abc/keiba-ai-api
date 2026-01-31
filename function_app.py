@@ -412,8 +412,46 @@ def parse_past_5runs(table):
 def extract_features(past_runs):
     try:
         ranks, pops, margins = [], [], []
+        agari_list = []          # 上がり順位
+        race_levels = []         # レースレベル
+        distance_fit_list = []   # 距離適性
+        baba_fit_list = []       # 馬場適性
+
+        # レースレベル判定用
+        def get_race_level(name):
+            if "G1" in name: return 6
+            if "G2" in name: return 5
+            if "G3" in name: return 4
+            if "OP" in name: return 3
+            if "3勝" in name: return 2
+            if "2勝" in name: return 1
+            return 0
+
+        # 距離抽出
+        def parse_distance(s):
+            try:
+                return int(s.replace("m", "").strip())
+            except:
+                return None
+
+        # 馬場適性（良・稍重・重・不良）
+        def parse_baba(s):
+            if "良" in s: return "良"
+            if "稍" in s: return "稍重"
+            if "重" in s: return "重"
+            if "不" in s: return "不良"
+            return None
+
+        # 直近の距離・馬場（比較用）
+        last_distance = None
+        last_baba = None
+
+        if past_runs:
+            last_distance = parse_distance(past_runs[0].get("distance", ""))
+            last_baba = parse_baba(past_runs[0].get("baba", ""))
 
         for r in past_runs:
+            # 既存特徴量
             try: ranks.append(int(r["rank"]))
             except: pass
             try: pops.append(int(r["pop"]))
@@ -421,25 +459,70 @@ def extract_features(past_runs):
             try: margins.append(float(r["margin"]))
             except: pass
 
+            # ① 上がり順位
+            try:
+                agari = int(r.get("agari", ""))
+                agari_list.append(agari)
+            except:
+                pass
+
+            # ② レースレベル
+            race_levels.append(get_race_level(r.get("race_name", "")))
+
+            # ③ 距離適性（延長=+1、短縮=-1、同距離=0）
+            dist = parse_distance(r.get("distance", ""))
+            if dist and last_distance:
+                if dist > last_distance:
+                    distance_fit_list.append(1)
+                elif dist < last_distance:
+                    distance_fit_list.append(-1)
+                else:
+                    distance_fit_list.append(0)
+
+            # ④ 馬場適性（同馬場=+1、違う=0）
+            baba = parse_baba(r.get("baba", ""))
+            if baba and last_baba:
+                baba_fit_list.append(1 if baba == last_baba else 0)
+
         return {
             "avg_rank": sum(ranks)/len(ranks) if ranks else 99,
             "avg_pop": sum(pops)/len(pops) if pops else 99,
-            "avg_margin": sum(margins)/len(margins) if margins else 9.9
+            "avg_margin": sum(margins)/len(margins) if margins else 9.9,
+
+            # 追加特徴量
+            "avg_agari": sum(agari_list)/len(agari_list) if agari_list else 99,
+            "avg_race_level": sum(race_levels)/len(race_levels) if race_levels else 0,
+            "distance_fit": sum(distance_fit_list) if distance_fit_list else 0,
+            "baba_fit": sum(baba_fit_list) if baba_fit_list else 0
         }, None
+
     except Exception as e:
         return None, f"特徴量抽出エラー: {e}"
-
 
 # -------------------------
 # 調子スコア
 # -------------------------
 def calc_condition_score(f):
     score = 100
+
+    # 既存特徴量
     score -= f["avg_rank"] * 2
     score -= f["avg_pop"] * 1.5
     score -= f["avg_margin"] * 5
-    return max(0, min(100, score))
 
+    # ① 上がり順位（良いほど加点）
+    score -= f["avg_agari"] * 1.2
+
+    # ② レースレベル（高いほど加点）
+    score += f["avg_race_level"] * 3
+
+    # ③ 距離適性（延長/短縮の成否）
+    score += f["distance_fit"] * 5
+
+    # ④ 馬場適性（同馬場で好走していれば加点）
+    score += f["baba_fit"] * 4
+
+    return max(0, min(100, round(score, 2)))
 
 # -------------------------
 # 血統テキスト取得

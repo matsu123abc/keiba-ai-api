@@ -341,29 +341,21 @@ def parse_shutuba_table_with_links(table):
         if len(cols) < 3:
             continue
 
-        waku = cols[0].get_text(strip=True)
-        umaban = cols[1].get_text(strip=True)
+        waku = cols[0].text.strip()
+        umaban = cols[1].text.strip()
 
         if not waku or not waku[0].isdigit():
             continue
 
         horse_name = ""
         horse_id = None
-        jockey = ""
 
         for c in cols:
             a = c.find("a")
-            href = (a.get("href") or "") if a else ""
-            if "horse" in href:
-                horse_name = a.get_text(strip=True)
-                horse_id = href.rstrip("/").split("/")[-1]
-                break
-
-        for c in cols:
-            a = c.find("a")
-            href = (a.get("href") or "") if a else ""
-            if "jockey" in href:
-                jockey = a.get_text(strip=True)
+            if a and "horse" in (a.get("href") or ""):
+                horse_name = a.text.strip()
+                horse_url = a.get("href", "")
+                horse_id = horse_url.rstrip("/").split("/")[-1]
                 break
 
         if not horse_name or not horse_id:
@@ -374,7 +366,6 @@ def parse_shutuba_table_with_links(table):
             "umaban": umaban,
             "horse_name": horse_name,
             "horse_id": horse_id,
-            "jockey": jockey
         })
 
     return horses
@@ -413,37 +404,31 @@ def parse_past_5runs_for_condition(table):
     if len(rows) <= 1:
         return []
 
-    header_cells = rows[0].find_all(["th", "td"])
-    col_map = {cell.get_text(strip=True): idx for idx, cell in enumerate(header_cells)}
-
-    def get(cols, col_name):
-        if col_name in col_map:
-            idx = col_map[col_name]
-            if idx < len(cols):
-                return cols[idx].get_text(strip=True)
-        return ""
-
     past_runs = []
 
     for row in rows[1:6]:
         cols = row.find_all("td")
-        if not cols:
-            continue
+
+        def safe(idx):
+            if idx < len(cols):
+                return cols[idx].get_text(strip=True)
+            return ""
 
         past_runs.append({
-            "date": get(cols, "日付"),
-            "race_name": get(cols, "レース名"),
-            "rank": get(cols, "着順"),
-            "pop": get(cols, "人気"),
-            "jockey": get(cols, "騎手"),
-            "weight": get(cols, "斤量"),
-            "distance": get(cols, "距離"),
-            "baba": get(cols, "馬場"),
-            "time": get(cols, "タイム"),
-            "margin": get(cols, "着差"),
-            "passing": get(cols, "通過"),
-            "agari": get(cols, "上り"),
-            "body_weight": get(cols, "馬体重"),
+            "date": safe(0),
+            "race_name": safe(1),
+            "class": safe(2),
+            "distance": safe(3),
+            "baba": safe(4),
+            "rank": safe(5),
+            "time": safe(7),
+            "margin": safe(8),       # ★着差はここ
+            "agari": safe(10),
+            "passing": safe(11),
+            "jockey": safe(12),
+            "weight": safe(13),
+            "body_weight": safe(14),
+            "pop": safe(9),          # ★人気はここ
         })
 
     return past_runs

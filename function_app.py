@@ -399,6 +399,42 @@ def extract_past_table_from_ajax(html_text: str):
     soup = BeautifulSoup(html_text, "lxml")
     return soup.find("table")
 
+# =========================================================
+# ① AI要約用（LLM に渡す軽量データ）
+# =========================================================
+def parse_past_5runs(table):
+    rows = table.find_all("tr")[1:]
+    past_runs = []
+
+    for row in rows[:5]:
+        cols = row.find_all("td")
+
+        def safe(idx):
+            if idx < len(cols):
+                return cols[idx].get_text(strip=True)
+            return ""
+
+        past_runs.append({
+            "date": safe(0),
+            "race": safe(1),
+            "class": safe(2),
+            "distance": safe(3),
+            "condition": safe(4),
+            "finish": safe(5),
+            "time": safe(7),
+            "agari": safe(10),
+            "passing": safe(11),
+            "jockey": safe(12),
+            "weight": safe(13),
+            "body_weight": safe(14),
+        })
+
+    return past_runs
+
+
+# =========================================================
+# ② 調子スコア計算用（特徴量抽出のための数値データ）
+# =========================================================
 def parse_past_5runs_for_condition(table):
     rows = table.find_all("tr")
     if len(rows) <= 1:
@@ -422,13 +458,13 @@ def parse_past_5runs_for_condition(table):
             "baba": safe(4),
             "rank": safe(5),
             "time": safe(7),
-            "margin": safe(8),       # ★着差はここ
+            "margin": safe(8),
+            "pop": safe(9),
             "agari": safe(10),
             "passing": safe(11),
             "jockey": safe(12),
             "weight": safe(13),
             "body_weight": safe(14),
-            "pop": safe(9),          # ★人気はここ
         })
 
     return past_runs
@@ -587,7 +623,6 @@ def wrap_html(race_id, body):
 </html>
 """
 
-
 @app.route(route="process_past")
 def process_past(req: func.HttpRequest) -> func.HttpResponse:
 
@@ -597,6 +632,7 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
 
     race_id = extract_race_id(url)
 
+    # 出馬表取得
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         html = requests.get(url, headers=headers, timeout=10).content
@@ -607,15 +643,18 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         return func.HttpResponse(f"出馬表取得エラー: {e}", status_code=500)
 
+    # OpenAI クライアント
     client, err = get_openai_client()
     if err:
         return func.HttpResponse(err, status_code=500)
 
     result_html = ""
 
+    # 各馬処理
     for h in horses:
         horse_id = h["horse_id"]
 
+        # Ajax 過去走取得
         past_html, err = fetch_past_runs_html(horse_id)
         if err:
             result_html += render_card(h, 0, err)
@@ -626,27 +665,36 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
             result_html += render_card(h, 0, "過去走テーブルなし")
             continue
 
-        past_runs = parse_past_5runs_for_condition(past_table)
-        if not past_runs:
+        # ---------------------------------------------------------
+        # ① 調子スコア用（詳細データ）
+        # ---------------------------------------------------------
+        past_runs_condition = parse_past_5runs_for_condition(past_table)
+        if not past_runs_condition:
             result_html += render_card(h, 0, "過去走データなし")
             continue
 
-        features, err = extract_features(past_runs)
+        features, err = extract_features(past_runs_condition)
         if err:
             result_html += render_card(h, 0, err)
             continue
 
         score = calc_condition_score(features)
 
+        # ---------------------------------------------------------
+        # ② AI要約用（軽量データ）
+        # ---------------------------------------------------------
+        past_runs_summary = parse_past_5runs(past_table)
+
         pedigree, err = fetch_pedigree_text(horse_id)
         if err:
             result_html += render_card(h, score, err)
             continue
 
+        # LLM に渡すコンテキスト
         context = json.dumps(
             {
                 "horse": h,
-                "past_runs": past_runs,
+                "past_runs": past_runs_summary,   # ← 軽量版を渡す
                 "features": features,
                 "pedigree": pedigree,
             },
@@ -662,3 +710,4 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
 
     full_html = wrap_html(race_id, result_html)
     return func.HttpResponse(full_html, mimetype="text/html")
+

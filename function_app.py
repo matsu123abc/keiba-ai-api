@@ -669,11 +669,13 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
         # ① 調子スコア用（詳細データ）
         # ---------------------------------------------------------
         past_runs_condition = parse_past_5runs_for_condition(past_table)
+        print("DEBUG past_runs_condition:", past_runs_condition) # ← 追加
         if not past_runs_condition:
             result_html += render_card(h, 0, "過去走データなし")
             continue
 
         features, err = extract_features(past_runs_condition)
+        print("DEBUG features:", features) # ← 追加
         if err:
             result_html += render_card(h, 0, err)
             continue

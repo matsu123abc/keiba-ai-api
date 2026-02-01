@@ -449,20 +449,19 @@ def parse_past_5runs_for_condition(table):
             return cols[idx].get_text(strip=True) if idx < len(cols) else ""
 
         past_runs.append({
-            "date": safe(0),            # 日付
-            "race_name": safe(1),       # 開催 + R
-            "class": safe(4),           # クラス（3歳未勝利など）
-            "distance": safe(13),       # 距離（ダ1200 / 芝1600）
-            "baba": safe(4),            # 馬場 → クラス列に馬場情報が混在するため暫定
-            "rank": safe(5),            # 着順（ここが重要）
-            "time": safe(6),            # タイム
-            "margin": safe(7),          # 着差
-            "pop": safe(8),             # 人気
-            "agari": safe(9),           # 上がり
-            "passing": safe(10),        # 通過
-            "jockey": safe(11),         # 騎手
-            "weight": safe(12),         # 斤量
-            "body_weight": safe(13),    # 距離（実質）
+            "date": safe(0),
+            "race_name": safe(1),
+            "class": safe(2),
+            "rank": safe(5),        # ★ ここが最重要
+            "time": safe(6),
+            "margin": safe(7),
+            "pop": safe(8),
+            "agari": safe(11),      # ログから index 11 が agari
+            "passing": safe(10),
+            "jockey": safe(12),
+            "weight": safe(13),
+            "distance": safe(13),   # 暫定（距離は後で修正）
+            "baba": safe(4),        # 暫定
         })
 
     return past_runs

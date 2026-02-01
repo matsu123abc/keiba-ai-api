@@ -408,7 +408,6 @@ def extract_past_table_from_ajax(html_text: str):
     soup = BeautifulSoup(html_text, "lxml")
     return soup.find("table")
 
-
 def parse_past_5runs_for_condition(table):
     rows = table.find_all("tr")
     if len(rows) <= 1:
@@ -434,22 +433,20 @@ def parse_past_5runs_for_condition(table):
         past_runs.append({
             "date": get(cols, "日付"),
             "race_name": get(cols, "レース名"),
-            "class": get(cols, "クラス"),
-            "distance": get(cols, "距離"),
-            "baba": get(cols, "馬場"),
             "rank": get(cols, "着順"),
-            "time": get(cols, "タイム"),
-            "agari": get(cols, "上り"),
-            "passing": get(cols, "通過"),
+            "pop": get(cols, "人気"),
             "jockey": get(cols, "騎手"),
             "weight": get(cols, "斤量"),
-            "body_weight": get(cols, "馬体重"),
-            "pop": get(cols, "人気"),
+            "distance": get(cols, "距離"),
+            "baba": get(cols, "馬場"),
+            "time": get(cols, "タイム"),
             "margin": get(cols, "着差"),
+            "passing": get(cols, "通過"),
+            "agari": get(cols, "上り"),
+            "body_weight": get(cols, "馬体重"),
         })
 
     return past_runs
-
 
 # 特徴量抽出
 def extract_features(past_runs):

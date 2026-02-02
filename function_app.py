@@ -467,90 +467,81 @@ def parse_past_5runs_for_condition(table):
     return past_runs
 
 # 特徴量抽出
-def extract_features(past_runs):
+def extract_features_ajax(past_runs):
     try:
-        ranks, pops, margins = [], [], []
-        agari_list = []
-        race_levels = []
-        distance_fit_list = []
-        baba_fit_list = []
+        margins = []
+        pops = []
+        agaris = []
+        passings = []
+        class_levels = []
 
-        def get_race_level(name):
-            if "G1" in name: return 6
-            if "G2" in name: return 5
-            if "G3" in name: return 4
-            if "OP" in name: return 3
-            if "3勝" in name: return 2
-            if "2勝" in name: return 1
+        # クラスの強さを数値化
+        def get_class_level(c):
+            if "G1" in c: return 6
+            if "G2" in c: return 5
+            if "G3" in c: return 4
+            if "OP" in c: return 3
+            if "1勝" in c: return 2
+            if "未勝利" in c: return 1
             return 0
 
-        def parse_distance(s):
-            try: return int(s.replace("m", "").strip())
-            except: return None
-
-        def parse_baba(s):
-            if "良" in s: return "良"
-            if "稍" in s: return "稍重"
-            if "重" in s: return "重"
-            if "不" in s: return "不良"
-            return None
-
-        last_distance = None
-        last_baba = None
-
-        if past_runs:
-            last_distance = parse_distance(past_runs[0].get("distance", ""))
-            last_baba = parse_baba(past_runs[0].get("baba", ""))
+        # 通過位置の安定性
+        def parse_passing(p):
+            try:
+                nums = [int(x) for x in p.split("-") if x.isdigit()]
+                if not nums:
+                    return None
+                return sum(nums) / len(nums)
+            except:
+                return None
 
         for r in past_runs:
-            try: ranks.append(int(r.get("rank", "")))
-            except: pass
-            try: pops.append(int(r.get("pop", "")))
-            except: pass
-            try: margins.append(float(r.get("margin", "")))
-            except: pass
-
+            # margin
             try:
-                agari = int(r.get("agari", ""))
-                agari_list.append(agari)
+                margins.append(float(r.get("margin", "")))
             except:
                 pass
 
-            race_levels.append(get_race_level(r.get("race_name", "")))
+            # pop
+            try:
+                pops.append(float(r.get("pop", "")))
+            except:
+                pass
 
-            dist = parse_distance(r.get("distance", ""))
-            if dist and last_distance:
-                if dist > last_distance: distance_fit_list.append(1)
-                elif dist < last_distance: distance_fit_list.append(-1)
-                else: distance_fit_list.append(0)
+            # agari
+            try:
+                agaris.append(float(r.get("agari", "")))
+            except:
+                pass
 
-            baba = parse_baba(r.get("baba", ""))
-            if baba and last_baba:
-                baba_fit_list.append(1 if baba == last_baba else 0)
+            # passing
+            p = parse_passing(r.get("passing", ""))
+            if p is not None:
+                passings.append(p)
+
+            # class
+            class_levels.append(get_class_level(r.get("class", "")))
 
         return {
-            "avg_rank": sum(ranks)/len(ranks) if ranks else 99,
-            "avg_pop": sum(pops)/len(pops) if pops else 99,
             "avg_margin": sum(margins)/len(margins) if margins else 9.9,
-            "avg_agari": sum(agari_list)/len(agari_list) if agari_list else 99,
-            "avg_race_level": sum(race_levels)/len(race_levels) if race_levels else 0,
-            "distance_fit": sum(distance_fit_list) if distance_fit_list else 0,
-            "baba_fit": sum(baba_fit_list) if baba_fit_list else 0
+            "avg_pop": sum(pops)/len(pops) if pops else 99,
+            "avg_agari": sum(agaris)/len(agaris) if agaris else 99,
+            "pace_stability": (1 / (1 + (sum(passings)/len(passings)))) if passings else 0,
+            "class_score": sum(class_levels)/len(class_levels) if class_levels else 0,
         }, None
 
     except Exception as e:
         return None, f"特徴量抽出エラー: {e}"
 
-
-def calc_condition_score(f):
+def calc_condition_score_ajax(f):
     score = 100
-    score -= f["avg_rank"] * 2
-    score -= f["avg_pop"] * 1.5
-    score -= f["avg_margin"] * 5
-    score -= f["avg_agari"] * 1.2
-    score += f["avg_race_level"] * 3
-    score += f["distance_fit"] * 5
-    score += f["baba_fit"] * 4
+
+    score -= f["avg_margin"] * 8
+    score -= f["avg_pop"] * 1.2
+    score -= f["avg_agari"] * 1.0
+    score += f["class_score"] * 3
+    score += f["pace_stability"] * 5
+
     return max(0, min(100, round(score, 2)))
 
 
@@ -671,13 +662,13 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
             result_html += render_card(h, 0, "過去走データなし")
             continue
 
-        features, err = extract_features(past_runs_condition)
+        features, err = extract_features_ajax(past_runs_condition)
         print("DEBUG features:", features) # ← 追加
         if err:
             result_html += render_card(h, 0, err)
             continue
 
-        score = calc_condition_score(features)
+        score = calc_condition_score_ajax(features)
 
         # ---------------------------------------------------------
         # ② AI要約用（軽量データ）

@@ -285,8 +285,9 @@ def ranking(req: func.HttpRequest) -> func.HttpResponse:
         mimetype="application/json"
     )
 
+
 # =========================================================
-# process_past（調子分析 + AI要約）
+# process_past（調子分析 + AI要約） PC版過去走対応 完全修正版
 # =========================================================
 
 # OpenAI import
@@ -371,69 +372,28 @@ def parse_shutuba_table_with_links(table):
     return horses
 
 
-# Ajax 過去走
-def fetch_past_runs_html(horse_id: str):
-    url = f"https://db.netkeiba.com/horse/ajax_horse_results.html?id={horse_id}"
+# =========================================================
+# PC版 過去走テーブル抽出
+# =========================================================
+def fetch_past_runs_pc(horse_id: str):
+    url = f"https://db.netkeiba.com/horse/{horse_id}/"
     try:
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-            "Referer": "https://db.netkeiba.com/",
-            "Cookie": "device=pc"
-        }
-        res = requests.get(url, headers=headers, timeout=10)
-        res.raise_for_status()
+        headers = {"User-Agent": "Mozilla/5.0"}
+        html = requests.get(url, headers=headers, timeout=10).content
+        soup = BeautifulSoup(html, "lxml")
 
-        res.encoding = "euc-jp"
+        table = soup.find("table", class_="race_table_01 nk_tb_common")
+        if table is None:
+            return None, "PC版過去走テーブルが見つかりません"
 
-        return res.text, None
+        return table, None
+
     except Exception as e:
-        return None, f"過去走HTML取得エラー: {e}"
-
-
-def extract_past_table_from_ajax(html_text: str):
-    soup = BeautifulSoup(html_text, "lxml")
-    return soup.find("table")
-
-# =========================================================
-# ① AI要約用（LLM に渡す軽量データ）
-# =========================================================
-def parse_past_5runs(table):
-    rows = table.find_all("tr")[1:]
-    past_runs = []
-
-    for row in rows[:5]:
-        cols = row.find_all("td")
-
-        def safe(idx):
-            if idx < len(cols):
-                return cols[idx].get_text(strip=True)
-            return ""
-
-        past_runs.append({
-            "date": safe(0),
-            "race": safe(1),
-            "class": safe(2),
-            "distance": safe(3),
-            "condition": safe(4),
-            "finish": safe(5),
-            "time": safe(7),
-            "agari": safe(10),
-            "passing": safe(11),
-            "jockey": safe(12),
-            "weight": safe(13),
-            "body_weight": safe(14),
-        })
-
-    return past_runs
+        return None, f"PC版過去走取得エラー: {e}"
 
 
 # =========================================================
-# ② 調子スコア計算用（特徴量抽出のための数値データ）
+# PC版 過去走パーサー（調子スコア用）
 # =========================================================
 def parse_past_5runs_for_condition(table):
     rows = table.find_all("tr")
@@ -450,23 +410,59 @@ def parse_past_5runs_for_condition(table):
 
         past_runs.append({
             "date": safe(0),
-            "race_name": safe(1),
-            "class": safe(2),
-            "rank": safe(5),        # ★ ここが最重要
-            "time": safe(6),
-            "margin": safe(7),
+            "race_name": safe(2),
+            "weather": safe(3),
+            "baba": safe(4),
             "pop": safe(8),
-            "agari": safe(11),      # ログから index 11 が agari
-            "passing": safe(10),
-            "jockey": safe(12),
-            "weight": safe(13),
-            "distance": safe(13),   # 暫定（距離は後で修正）
-            "baba": safe(4),        # 暫定
+            "rank": safe(9),          # ★ 着順（PC版は必ず存在）
+            "time": safe(10),
+            "margin": safe(11),
+            "passing": safe(12),
+            "agari": safe(13),
+            "body_weight": safe(14),
+            "weight": safe(15),
+            "jockey": safe(16),
+            "distance": safe(17),
+            "class": safe(18),
         })
 
     return past_runs
 
-# 特徴量抽出
+
+# =========================================================
+# AI要約用（軽量版）
+# =========================================================
+def parse_past_5runs(table):
+    rows = table.find_all("tr")[1:]
+    past_runs = []
+
+    for row in rows[:5]:
+        cols = row.find_all("td")
+
+        def safe(idx):
+            return cols[idx].get_text(strip=True) if idx < len(cols) else ""
+
+        past_runs.append({
+            "date": safe(0),
+            "race": safe(2),
+            "class": safe(18),
+            "distance": safe(17),
+            "condition": safe(4),
+            "finish": safe(9),
+            "time": safe(10),
+            "agari": safe(13),
+            "passing": safe(12),
+            "jockey": safe(16),
+            "weight": safe(15),
+            "body_weight": safe(14),
+        })
+
+    return past_runs
+
+
+# =========================================================
+# 特徴量抽出・スコア計算（そのまま）
+# =========================================================
 def extract_features(past_runs):
     try:
         ranks, pops, margins = [], [], []
@@ -485,8 +481,10 @@ def extract_features(past_runs):
             return 0
 
         def parse_distance(s):
-            try: return int(s.replace("m", "").strip())
-            except: return None
+            try:
+                return int(s.replace("m", "").replace("芝", "").replace("ダ", "").strip())
+            except:
+                return None
 
         def parse_baba(s):
             if "良" in s: return "良"
@@ -554,72 +552,9 @@ def calc_condition_score(f):
     return max(0, min(100, round(score, 2)))
 
 
-def fetch_pedigree_text(horse_id: str):
-    try:
-        url = f"https://db.netkeiba.com/horse/ped/{horse_id}/"
-        html = requests.get(url, timeout=10).content
-        soup = BeautifulSoup(html, "lxml")
-        return soup.get_text(" ", strip=True), None
-    except Exception as e:
-        return None, f"血統取得エラー: {e}"
-
-
-def generate_summary(client, context: str):
-    try:
-        prompt = f"""
-あなたは競馬の専門アナリストです。
-以下のデータ（過去走・特徴量・血統）を基に、
-競走馬の「強み」「弱み」「適性」を200字以内で要約してください。
-
-【出力フォーマット】
-{{
-  "strong": "...",
-  "weak": "...",
-  "suitability": "..."
-}}
-
-【解析対象データ】
-{context}
-"""
-
-        res = client.chat.completions.create(
-            model="keiba-gpt4omini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=300,
-            temperature=0.4
-        )
-
-        return res.choices[0].message.content, None
-
-    except Exception as e:
-        return None, f"OpenAI 要約エラー: {e}"
-
-
-def render_card(h, score, summary):
-    return f"""
-<div style="border:1px solid #ccc; padding:10px; margin:10px; border-radius:8px;">
-  <h3>{h["horse_name"]}（{h.get("jockey", "")}）</h3>
-  <p><b>枠番:</b> {h.get("waku", "")} / <b>馬番:</b> {h.get("umaban", "")}</p>
-  <p><b>調子スコア:</b> {score}</p>
-  <p>{summary}</p>
-</div>
-"""
-
-
-def wrap_html(race_id, body):
-    return f"""
-<html>
-<head>
-<meta charset="UTF-8">
-<title>調子分析 {race_id}</title>
-</head>
-<body>
-<h2>調子分析レポート（race_id: {race_id}）</h2>
-{body}
-</body>
-</html>
-"""
-
+# =========================================================
+# process_past 本体（PC版過去走対応）
+# =========================================================
 @app.route(route="process_past")
 def process_past(req: func.HttpRequest) -> func.HttpResponse:
 
@@ -651,37 +586,26 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
     for h in horses:
         horse_id = h["horse_id"]
 
-        # Ajax 過去走取得
-        past_html, err = fetch_past_runs_html(horse_id)
+        # PC版 過去走取得
+        past_table, err = fetch_past_runs_pc(horse_id)
         if err:
             result_html += render_card(h, 0, err)
             continue
 
-        past_table = extract_past_table_from_ajax(past_html)
-        if past_table is None:
-            result_html += render_card(h, 0, "過去走テーブルなし")
-            continue
-
-        # ---------------------------------------------------------
-        # ① 調子スコア用（詳細データ）
-        # ---------------------------------------------------------
+        # 調子スコア用
         past_runs_condition = parse_past_5runs_for_condition(past_table)
-        print("DEBUG past_runs_condition:", past_runs_condition) # ← 追加
         if not past_runs_condition:
             result_html += render_card(h, 0, "過去走データなし")
             continue
 
         features, err = extract_features(past_runs_condition)
-        print("DEBUG features:", features) # ← 追加
         if err:
             result_html += render_card(h, 0, err)
             continue
 
         score = calc_condition_score(features)
 
-        # ---------------------------------------------------------
-        # ② AI要約用（軽量データ）
-        # ---------------------------------------------------------
+        # AI要約用
         past_runs_summary = parse_past_5runs(past_table)
 
         pedigree, err = fetch_pedigree_text(horse_id)
@@ -689,11 +613,10 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
             result_html += render_card(h, score, err)
             continue
 
-        # LLM に渡すコンテキスト
         context = json.dumps(
             {
                 "horse": h,
-                "past_runs": past_runs_summary,   # ← 軽量版を渡す
+                "past_runs": past_runs_summary,
                 "features": features,
                 "pedigree": pedigree,
             },

@@ -214,7 +214,7 @@ def scoring(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 # =========================================================
-# ranking 関数
+# ranking 関数（調子スコアのみで並べるバージョン）
 # =========================================================
 @app.route(route="ranking")
 def ranking(req: func.HttpRequest) -> func.HttpResponse:
@@ -237,53 +237,14 @@ def ranking(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json"
         )
 
-    ranked = []
-
-    for h in horses:
-        total = h.get("score", 0)
-
-        # 枠順補正
-        try:
-            waku = int(h.get("waku", 0))
-            total += max(0, 10 - (waku - 1) * 1.2)
-        except:
-            pass
-
-        # 騎手補正
-        jockey = h.get("jockey", "")
-        jockey_score_map = {
-            "川田": 8, "ルメール": 8, "戸崎": 6, "横山武": 6,
-            "松山": 5, "坂井": 5, "武豊": 5,
-        }
-        for key, val in jockey_score_map.items():
-            if key in jockey:
-                total += val
-                break
-
-        # オッズ補正
-        odds = h.get("odds")
-        if odds:
-            try:
-                odds_val = float(odds)
-                total += max(0, 15 - odds_val * 1.5)
-            except:
-                pass
-
-        # 馬番補正
-        try:
-            umaban = int(h.get("umaban", 0))
-            total += max(0, 8 - umaban * 0.3)
-        except:
-            pass
-
-        ranked.append({**h, "ranking_score": round(total, 2)})
-
-    ranked_sorted = sorted(ranked, key=lambda x: x["ranking_score"], reverse=True)
+    # 調子スコアだけで並べる
+    ranked_sorted = sorted(horses, key=lambda x: x.get("score", 0), reverse=True)
 
     return func.HttpResponse(
         json.dumps({"horses": ranked_sorted}, ensure_ascii=False),
         mimetype="application/json"
     )
+
 
 # =========================================================
 # process_past（調子分析 + AI要約）

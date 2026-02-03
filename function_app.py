@@ -580,7 +580,7 @@ def generate_summary(client, context_json):
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="keiba-gpt4omini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
         )

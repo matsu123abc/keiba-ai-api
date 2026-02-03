@@ -611,8 +611,9 @@ def generate_summary(client, context_json):
     except Exception as e:
         return None, f"LLM要約エラー: {e}"
 
+
 def render_card(h, score, summary, past_runs):
-    # 過去走テーブルHTMLを作成（通過 → 着順 に変更）
+    # 過去走テーブルHTMLを作成
     past_rows = ""
     for r in past_runs:
         past_rows += f"""
@@ -622,9 +623,10 @@ def render_card(h, score, summary, past_runs):
           <td>{r.get("class","")}</td>
           <td>{r.get("distance","")}</td>
           <td>{r.get("condition","")}</td>
-          <td>{r.get("finish","")}</td>      <!-- ★ 着順 -->
+          <td>{r.get("finish","")}</td>
           <td>{r.get("time","")}</td>
           <td>{r.get("agari","")}</td>
+          <td>{r.get("passing","")}</td>
           <td>{r.get("jockey","")}</td>
         </tr>
         """
@@ -632,15 +634,9 @@ def render_card(h, score, summary, past_runs):
     past_table = f"""
     <table border="1" style="border-collapse:collapse; margin-top:10px; font-size:12px;">
       <tr>
-        <th>日付</th>
-        <th>レース</th>
-        <th>クラス</th>
-        <th>距離</th>
-        <th>馬場</th>
-        <th>着順</th>     <!-- ★ 列名変更 -->
-        <th>タイム</th>
-        <th>上がり</th>
-        <th>騎手</th>
+        <th>日付</th><th>レース</th><th>クラス</th><th>距離</th>
+        <th>馬場</th><th>着順</th><th>タイム</th><th>上がり</th>
+        <th>通過</th><th>騎手</th>
       </tr>
       {past_rows}
     </table>

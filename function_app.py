@@ -214,7 +214,7 @@ def scoring(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 # =========================================================
-# ranking 関数（調子スコアのみで並べるバージョン）
+# ranking 関数
 # =========================================================
 @app.route(route="ranking")
 def ranking(req: func.HttpRequest) -> func.HttpResponse:
@@ -237,14 +237,53 @@ def ranking(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json"
         )
 
-    # 調子スコアだけで並べる
-    ranked_sorted = sorted(horses, key=lambda x: x.get("score", 0), reverse=True)
+    ranked = []
+
+    for h in horses:
+        total = h.get("score", 0)
+
+        # 枠順補正
+        try:
+            waku = int(h.get("waku", 0))
+            total += max(0, 10 - (waku - 1) * 1.2)
+        except:
+            pass
+
+        # 騎手補正
+        jockey = h.get("jockey", "")
+        jockey_score_map = {
+            "川田": 8, "ルメール": 8, "戸崎": 6, "横山武": 6,
+            "松山": 5, "坂井": 5, "武豊": 5,
+        }
+        for key, val in jockey_score_map.items():
+            if key in jockey:
+                total += val
+                break
+
+        # オッズ補正
+        odds = h.get("odds")
+        if odds:
+            try:
+                odds_val = float(odds)
+                total += max(0, 15 - odds_val * 1.5)
+            except:
+                pass
+
+        # 馬番補正
+        try:
+            umaban = int(h.get("umaban", 0))
+            total += max(0, 8 - umaban * 0.3)
+        except:
+            pass
+
+        ranked.append({**h, "ranking_score": round(total, 2)})
+
+    ranked_sorted = sorted(ranked, key=lambda x: x["ranking_score"], reverse=True)
 
     return func.HttpResponse(
         json.dumps({"horses": ranked_sorted}, ensure_ascii=False),
         mimetype="application/json"
     )
-
 
 # =========================================================
 # process_past（調子分析 + AI要約）
@@ -574,109 +613,91 @@ def wrap_html(race_id, body):
 
 @app.route(route="process_past")
 def process_past(req: func.HttpRequest) -> func.HttpResponse:
-    logging.info("process_past triggered")
 
-    # URL 取得
     url = req.params.get("url")
     if not url:
-        return func.HttpResponse(
-            json.dumps({"error": "url が必要です"}, ensure_ascii=False),
-            status_code=400,
-            mimetype="application/json"
-        )
+        return func.HttpResponse("url パラメータが必要です", status_code=400)
 
-    # race_id 抽出
     race_id = extract_race_id(url)
 
     # 出馬表取得
-    html, err = fetch_html(url)
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        html = requests.get(url, headers=headers, timeout=10).content
+        table = extract_shutuba_table_with_links(html)
+        if table is None:
+            return func.HttpResponse("出馬表テーブルが見つかりませんでした", status_code=500)
+        horses = parse_shutuba_table_with_links(table)
+    except Exception as e:
+        return func.HttpResponse(f"出馬表取得エラー: {e}", status_code=500)
+
+    # OpenAI クライアント
+    client, err = get_openai_client()
     if err:
-        return func.HttpResponse(
-            json.dumps({"error": f"出馬表取得エラー: {err}"}, ensure_ascii=False),
-            status_code=500,
-            mimetype="application/json"
-        )
+        return func.HttpResponse(err, status_code=500)
 
-    # 出馬表テーブル抽出
-    table = extract_shutuba_table_with_links(html)
-    if table is None:
-        return func.HttpResponse(
-            json.dumps({"error": "出馬表テーブルが見つかりません"}, ensure_ascii=False),
-            status_code=500,
-            mimetype="application/json"
-        )
+    result_html = ""
 
-    # 馬リスト
-    horses = parse_shutuba_table_with_links(table)
-
-    results = []   # JSON 返却用のリスト
-
-    # 各馬の過去走 → 調子スコア → AI要約
+    # 各馬処理
     for h in horses:
-        horse_id = h.get("horse_id")
-        if not horse_id:
-            results.append({
-                **h,
-                "score": 0,
-                "summary": {"strong": "", "weak": "", "suitability": ""}
-            })
-            continue
+        horse_id = h["horse_id"]
 
         # Ajax 過去走取得
-        past_runs, err = fetch_past_runs_ajax(horse_id)
+        past_html, err = fetch_past_runs_html(horse_id)
         if err:
-            results.append({
-                **h,
-                "score": 0,
-                "summary": {"strong": "", "weak": "", "suitability": ""}
-            })
+            result_html += render_card(h, 0, err)
             continue
 
-        # 特徴量抽出
-        features, err = extract_features_ajax(past_runs)
-        if err:
-            results.append({
-                **h,
-                "score": 0,
-                "summary": {"strong": "", "weak": "", "suitability": ""}
-            })
+        past_table = extract_past_table_from_ajax(past_html)
+        if past_table is None:
+            result_html += render_card(h, 0, "過去走テーブルなし")
             continue
 
-        # 調子スコア計算
+        # ---------------------------------------------------------
+        # ① 調子スコア用（詳細データ）
+        # ---------------------------------------------------------
+        past_runs_condition = parse_past_5runs_for_condition(past_table)
+        print("DEBUG past_runs_condition:", past_runs_condition) # ← 追加
+        if not past_runs_condition:
+            result_html += render_card(h, 0, "過去走データなし")
+            continue
+
+        features, err = extract_features_ajax(past_runs_condition)
+        print("DEBUG features:", features) # ← 追加
+        if err:
+            result_html += render_card(h, 0, err)
+            continue
+
         score = calc_condition_score_ajax(features)
 
-        # AI要約生成
-        summary = generate_summary(h, features, score)
+        # ---------------------------------------------------------
+        # ② AI要約用（軽量データ）
+        # ---------------------------------------------------------
+        past_runs_summary = parse_past_5runs(past_table)
 
-        # JSON 用に格納
-        results.append({
-            **h,
-            "score": score,
-            "summary": summary
-        })
+        pedigree, err = fetch_pedigree_text(horse_id)
+        if err:
+            result_html += render_card(h, score, err)
+            continue
 
-    # JSON 化できない値を安全に文字列化する
-    def safe(obj):
-        try:
-            json.dumps(obj, ensure_ascii=False)
-            return obj
-        except:
-            return str(obj)
+        # LLM に渡すコンテキスト
+        context = json.dumps(
+            {
+                "horse": h,
+                "past_runs": past_runs_summary,   # ← 軽量版を渡す
+                "features": features,
+                "pedigree": pedigree,
+            },
+            ensure_ascii=False,
+        )
 
-    safe_results = [{k: safe(v) for k, v in h.items()} for h in results]
+        summary, err = generate_summary(client, context)
+        if err:
+            result_html += render_card(h, score, err)
+            continue
 
-    try:
-        test_json = json.dumps({"race_id": race_id, "horses": results}, ensure_ascii=False)
-        print("JSON OK")
-    except Exception as e:
-        print("JSON ERROR:", str(e))
+        result_html += render_card(h, score, summary)
 
-    # JSON 返却
-    return func.HttpResponse(
-        json.dumps({
-            "race_id": race_id,
-            "horses": safe_results
-        }, ensure_ascii=False),
-        mimetype="application/json"
-    )
+    full_html = wrap_html(race_id, result_html)
+    return func.HttpResponse(full_html, mimetype="text/html")
 

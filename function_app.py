@@ -554,34 +554,42 @@ def fetch_pedigree_text(horse_id: str):
     except Exception as e:
         return None, f"血統取得エラー: {e}"
 
-def generate_summary(horse, features, score):
+def generate_summary(client, context_json):
+    """
+    client: AzureOpenAI クライアント
+    context_json: JSON文字列（horse, past_runs, features, pedigree を含む）
+    """
+
     prompt = f"""
 あなたは競馬の分析アナリストです。
 
 以下の馬の「調子スコア」がどの特徴量に基づいて高い/低いのか、
 その根拠を数値ベースで説明してください。
 
-【馬名】
-{horse['horse_name']}
-
-【調子スコア】
-{score}
-
-【特徴量（数値）】
-{json.dumps(features, ensure_ascii=False)}
+【入力データ（JSON）】
+{context_json}
 
 【出力フォーマット（必ず JSON）】
-{
+{{
   "strong": "強みを具体的に。どの数値が良いのか？",
   "weak": "弱みを具体的に。どの数値が悪いのか？",
   "reason": "調子スコアの根拠を数値ベースで説明（例：平均着差、アガリ、ペース安定性など）",
   "suitability": "適性を説明"
-}
+}}
 """
 
-    response = call_llm(prompt)
-    return json.loads(response)
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.4,
+        )
 
+        content = response.choices[0].message.content
+        return json.loads(content), None
+
+    except Exception as e:
+        return None, f"LLM要約エラー: {e}"
 
 def render_card(h, score, summary):
     return f"""
@@ -589,10 +597,14 @@ def render_card(h, score, summary):
   <h3>{h["horse_name"]}（{h.get("jockey", "")}）</h3>
   <p><b>枠番:</b> {h.get("waku", "")} / <b>馬番:</b> {h.get("umaban", "")}</p>
   <p><b>調子スコア:</b> {score}</p>
-  <p>{summary}</p>
+
+  <p><b>根拠:</b> {summary.get("reason", "")}</p>
+
+  <p><b>強み:</b> {summary.get("strong", "")}</p>
+  <p><b>弱み:</b> {summary.get("weak", "")}</p>
+  <p><b>適性:</b> {summary.get("suitability", "")}</p>
 </div>
 """
-
 
 def wrap_html(race_id, body):
     return f"""

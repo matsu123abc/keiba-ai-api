@@ -611,8 +611,36 @@ def generate_summary(client, context_json):
     except Exception as e:
         return None, f"LLM要約エラー: {e}"
 
+def render_card(h, score, summary, past_runs):
+    # 過去走テーブルHTMLを作成
+    past_rows = ""
+    for r in past_runs:
+        past_rows += f"""
+        <tr>
+          <td>{r.get("date","")}</td>
+          <td>{r.get("race","")}</td>
+          <td>{r.get("class","")}</td>
+          <td>{r.get("distance","")}</td>
+          <td>{r.get("condition","")}</td>
+          <td>{r.get("finish","")}</td>
+          <td>{r.get("time","")}</td>
+          <td>{r.get("agari","")}</td>
+          <td>{r.get("passing","")}</td>
+          <td>{r.get("jockey","")}</td>
+        </tr>
+        """
 
-def render_card(h, score, summary):
+    past_table = f"""
+    <table border="1" style="border-collapse:collapse; margin-top:10px; font-size:12px;">
+      <tr>
+        <th>日付</th><th>レース</th><th>クラス</th><th>距離</th>
+        <th>馬場</th><th>着順</th><th>タイム</th><th>上がり</th>
+        <th>通過</th><th>騎手</th>
+      </tr>
+      {past_rows}
+    </table>
+    """
+
     return f"""
 <div style="border:1px solid #ccc; padding:10px; margin:10px; border-radius:8px;">
   <h3>{h["horse_name"]}（{h.get("jockey", "")}）</h3>
@@ -620,10 +648,12 @@ def render_card(h, score, summary):
   <p><b>調子スコア:</b> {score}</p>
 
   <p><b>根拠:</b> {summary.get("reason", "")}</p>
-
   <p><b>強み:</b> {summary.get("strong", "")}</p>
   <p><b>弱み:</b> {summary.get("weak", "")}</p>
   <p><b>適性:</b> {summary.get("suitability", "")}</p>
+
+  <h4>過去5走</h4>
+  {past_table}
 </div>
 """
 
@@ -726,7 +756,7 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
             result_html += render_card(h, score, err)
             continue
 
-        result_html += render_card(h, score, summary)
+        result_html += render_card(h, score, summary, past_runs_summary)
 
     full_html = wrap_html(race_id, result_html)
     return func.HttpResponse(full_html, mimetype="text/html")

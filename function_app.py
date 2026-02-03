@@ -572,7 +572,6 @@ def wrap_html(race_id, body):
 </html>
 """
 
-
 @app.route(route="process_past")
 def process_past(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("process_past triggered")
@@ -610,7 +609,7 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
     # 馬リスト
     horses = parse_shutuba_table_with_links(table)
 
-    results = []   # ← JSON 返却用のリスト
+    results = []   # JSON 返却用のリスト
 
     # 各馬の過去走 → 調子スコア → AI要約
     for h in horses:
@@ -656,11 +655,22 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
             "summary": summary
         })
 
+    # JSON 化できない値を安全に文字列化する
+    def safe(obj):
+        try:
+            json.dumps(obj, ensure_ascii=False)
+            return obj
+        except:
+            return str(obj)
+
+    safe_results = [{k: safe(v) for k, v in h.items()} for h in results]
+
     # JSON 返却
     return func.HttpResponse(
         json.dumps({
             "race_id": race_id,
-            "horses": results
+            "horses": safe_results
         }, ensure_ascii=False),
         mimetype="application/json"
     )
+

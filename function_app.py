@@ -554,36 +554,33 @@ def fetch_pedigree_text(horse_id: str):
     except Exception as e:
         return None, f"血統取得エラー: {e}"
 
+def generate_summary(horse, features, score):
+    prompt = f"""
+あなたは競馬の分析アナリストです。
 
-def generate_summary(client, context: str):
-    try:
-        prompt = f"""
-あなたは競馬の専門アナリストです。
-以下のデータ（過去走・特徴量・血統）を基に、
-競走馬の「強み」「弱み」「適性」を200字以内で要約してください。
+以下の馬の「調子スコア」がどの特徴量に基づいて高い/低いのか、
+その根拠を数値ベースで説明してください。
 
-【出力フォーマット】
-{{
-  "strong": "...",
-  "weak": "...",
-  "suitability": "..."
-}}
+【馬名】
+{horse['horse_name']}
 
-【解析対象データ】
-{context}
+【調子スコア】
+{score}
+
+【特徴量（数値）】
+{json.dumps(features, ensure_ascii=False)}
+
+【出力フォーマット（必ず JSON）】
+{
+  "strong": "強みを具体的に。どの数値が良いのか？",
+  "weak": "弱みを具体的に。どの数値が悪いのか？",
+  "reason": "調子スコアの根拠を数値ベースで説明（例：平均着差、アガリ、ペース安定性など）",
+  "suitability": "適性を説明"
+}
 """
 
-        res = client.chat.completions.create(
-            model="keiba-gpt4omini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=300,
-            temperature=0.4
-        )
-
-        return res.choices[0].message.content, None
-
-    except Exception as e:
-        return None, f"OpenAI 要約エラー: {e}"
+    response = call_llm(prompt)
+    return json.loads(response)
 
 
 def render_card(h, score, summary):

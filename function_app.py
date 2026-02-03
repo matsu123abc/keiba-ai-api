@@ -572,93 +572,95 @@ def wrap_html(race_id, body):
 </html>
 """
 
+
 @app.route(route="process_past")
 def process_past(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info("process_past triggered")
 
+    # URL 取得
     url = req.params.get("url")
     if not url:
-        return func.HttpResponse("url パラメータが必要です", status_code=400)
+        return func.HttpResponse(
+            json.dumps({"error": "url が必要です"}, ensure_ascii=False),
+            status_code=400,
+            mimetype="application/json"
+        )
 
+    # race_id 抽出
     race_id = extract_race_id(url)
 
     # 出馬表取得
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        html = requests.get(url, headers=headers, timeout=10).content
-        table = extract_shutuba_table_with_links(html)
-        if table is None:
-            return func.HttpResponse("出馬表テーブルが見つかりませんでした", status_code=500)
-        horses = parse_shutuba_table_with_links(table)
-    except Exception as e:
-        return func.HttpResponse(f"出馬表取得エラー: {e}", status_code=500)
-
-    # OpenAI クライアント
-    client, err = get_openai_client()
+    html, err = fetch_html(url)
     if err:
-        return func.HttpResponse(err, status_code=500)
-
-    result_html = ""
-
-    # 各馬処理
-    for h in horses:
-        horse_id = h["horse_id"]
-
-        # Ajax 過去走取得
-        past_html, err = fetch_past_runs_html(horse_id)
-        if err:
-            result_html += render_card(h, 0, err)
-            continue
-
-        past_table = extract_past_table_from_ajax(past_html)
-        if past_table is None:
-            result_html += render_card(h, 0, "過去走テーブルなし")
-            continue
-
-        # ---------------------------------------------------------
-        # ① 調子スコア用（詳細データ）
-        # ---------------------------------------------------------
-        past_runs_condition = parse_past_5runs_for_condition(past_table)
-        print("DEBUG past_runs_condition:", past_runs_condition) # ← 追加
-        if not past_runs_condition:
-            result_html += render_card(h, 0, "過去走データなし")
-            continue
-
-        features, err = extract_features_ajax(past_runs_condition)
-        print("DEBUG features:", features) # ← 追加
-        if err:
-            result_html += render_card(h, 0, err)
-            continue
-
-        score = calc_condition_score_ajax(features)
-
-        # ---------------------------------------------------------
-        # ② AI要約用（軽量データ）
-        # ---------------------------------------------------------
-        past_runs_summary = parse_past_5runs(past_table)
-
-        pedigree, err = fetch_pedigree_text(horse_id)
-        if err:
-            result_html += render_card(h, score, err)
-            continue
-
-        # LLM に渡すコンテキスト
-        context = json.dumps(
-            {
-                "horse": h,
-                "past_runs": past_runs_summary,   # ← 軽量版を渡す
-                "features": features,
-                "pedigree": pedigree,
-            },
-            ensure_ascii=False,
+        return func.HttpResponse(
+            json.dumps({"error": f"出馬表取得エラー: {err}"}, ensure_ascii=False),
+            status_code=500,
+            mimetype="application/json"
         )
 
-        summary, err = generate_summary(client, context)
-        if err:
-            result_html += render_card(h, score, err)
+    # 出馬表テーブル抽出
+    table = extract_shutuba_table_with_links(html)
+    if table is None:
+        return func.HttpResponse(
+            json.dumps({"error": "出馬表テーブルが見つかりません"}, ensure_ascii=False),
+            status_code=500,
+            mimetype="application/json"
+        )
+
+    # 馬リスト
+    horses = parse_shutuba_table_with_links(table)
+
+    results = []   # ← JSON 返却用のリスト
+
+    # 各馬の過去走 → 調子スコア → AI要約
+    for h in horses:
+        horse_id = h.get("horse_id")
+        if not horse_id:
+            results.append({
+                **h,
+                "score": 0,
+                "summary": {"strong": "", "weak": "", "suitability": ""}
+            })
             continue
 
-        result_html += render_card(h, score, summary)
+        # Ajax 過去走取得
+        past_runs, err = fetch_past_runs_ajax(horse_id)
+        if err:
+            results.append({
+                **h,
+                "score": 0,
+                "summary": {"strong": "", "weak": "", "suitability": ""}
+            })
+            continue
 
-    full_html = wrap_html(race_id, result_html)
-    return func.HttpResponse(full_html, mimetype="text/html")
+        # 特徴量抽出
+        features, err = extract_features_ajax(past_runs)
+        if err:
+            results.append({
+                **h,
+                "score": 0,
+                "summary": {"strong": "", "weak": "", "suitability": ""}
+            })
+            continue
 
+        # 調子スコア計算
+        score = calc_condition_score_ajax(features)
+
+        # AI要約生成
+        summary = generate_summary(h, features, score)
+
+        # JSON 用に格納
+        results.append({
+            **h,
+            "score": score,
+            "summary": summary
+        })
+
+    # JSON 返却
+    return func.HttpResponse(
+        json.dumps({
+            "race_id": race_id,
+            "horses": results
+        }, ensure_ascii=False),
+        mimetype="application/json"
+    )

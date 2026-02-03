@@ -665,6 +665,12 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
 
     safe_results = [{k: safe(v) for k, v in h.items()} for h in results]
 
+    try:
+        test_json = json.dumps({"race_id": race_id, "horses": results}, ensure_ascii=False)
+        print("JSON OK")
+    except Exception as e:
+        print("JSON ERROR:", str(e))
+
     # JSON 返却
     return func.HttpResponse(
         json.dumps({

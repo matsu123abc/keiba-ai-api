@@ -554,6 +554,20 @@ def fetch_pedigree_text(horse_id: str):
     except Exception as e:
         return None, f"血統取得エラー: {e}"
 
+
+def extract_json(text):
+    """
+    LLM の出力から JSON 部分だけを安全に抽出する
+    """
+    try:
+        match = re.search(r"\{[\s\S]*\}", text)
+        if match:
+            return json.loads(match.group())
+        return None
+    except Exception:
+        return None
+
+
 def generate_summary(client, context_json):
     """
     client: AzureOpenAI クライアント
@@ -580,16 +594,23 @@ def generate_summary(client, context_json):
 
     try:
         response = client.chat.completions.create(
-            model="keiba-gpt4omini",
+            model="keiba-gpt4omini",   # ★ 章さんのデプロイ名
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
         )
 
         content = response.choices[0].message.content
-        return json.loads(content), None
+
+        # ★ JSON 部分だけを安全に抽出
+        summary = extract_json(content)
+        if summary is None:
+            return None, f"LLM JSON抽出エラー: {content}"
+
+        return summary, None
 
     except Exception as e:
         return None, f"LLM要約エラー: {e}"
+
 
 def render_card(h, score, summary):
     return f"""

@@ -710,14 +710,10 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         return func.HttpResponse(f"出馬表取得エラー: {e}", status_code=500)
 
-    # OpenAI クライアント
-    client, err = get_openai_client()
-    if err:
-        return func.HttpResponse(err, status_code=500)
-
+    # ★ AI要約を使わないので OpenAI クライアント不要
     result_html = ""
 
-    # 各馬処理（★ここを丸ごと try/except で囲む）
+    # 各馬処理（AI要約なし）
     for h in horses:
         try:
             horse_id = h["horse_id"]
@@ -746,33 +742,10 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
 
             score = calc_condition_score_ajax(features)
 
-            # ② AI要約用
-            past_runs_summary = parse_past_5runs(past_table) or []
-
-            pedigree, err = fetch_pedigree_text(horse_id)
-            if err:
-                result_html += render_card(h, score, err)
-                continue
-
-            context = json.dumps(
-                {
-                    "horse": h,
-                    "past_runs": past_runs_summary,
-                    "features": features,
-                    "pedigree": pedigree,
-                },
-                ensure_ascii=False,
-            )
-
-            summary, err = generate_summary(client, context)
-            if err:
-                result_html += render_card(h, score, err)
-                continue
-
-            result_html += render_card(h, score, summary, past_runs_summary)
+            # ★ AI要約は行わず、スコアのみ表示
+            result_html += render_card(h, score, "AI要約なし", [])
 
         except Exception as e:
-            # ★ どんな例外でも落とさず、馬ごとにスキップ
             result_html += render_card(h, 0, f"内部エラー: {e}")
             continue
 

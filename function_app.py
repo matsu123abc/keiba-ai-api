@@ -411,11 +411,10 @@ def extract_past_table_from_ajax(html_text: str):
 # ① AI要約用（LLM に渡す軽量データ）
 # =========================================================
 def parse_past_5runs(table):
-    # ★ 防御：table が None の場合は空リスト
+    # ★ table が None の場合は空リスト
     if table is None:
         return []
 
-    # tr が無い場合も空リスト
     rows = table.find_all("tr")
     if not rows or len(rows) <= 1:
         return []
@@ -425,6 +424,10 @@ def parse_past_5runs(table):
 
     for row in rows[:5]:
         cols = row.find_all("td")
+
+        # ★ cols が空ならスキップ（これが最重要）
+        if not cols:
+            continue
 
         def safe(idx):
             return cols[idx].get_text(strip=True) if idx < len(cols) else ""
@@ -450,7 +453,6 @@ def parse_past_5runs(table):
 # ② 調子スコア計算用（特徴量抽出のための数値データ）
 # =========================================================
 def parse_past_5runs_for_condition(table):
-    # ★ 追加：table が None の場合は空リストを返す
     if table is None:
         return []
 
@@ -462,6 +464,10 @@ def parse_past_5runs_for_condition(table):
 
     for row in rows[1:6]:
         cols = row.find_all("td")
+
+        # ★ cols が空ならスキップ（これが最重要）
+        if not cols:
+            continue
 
         def safe(idx):
             return cols[idx].get_text(strip=True) if idx < len(cols) else ""

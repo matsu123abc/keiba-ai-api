@@ -395,8 +395,17 @@ def fetch_past_runs_html(horse_id: str):
         return None, f"過去走HTML取得エラー: {e}"
 
 def extract_past_table_from_ajax(html_text: str):
-    soup = BeautifulSoup(html_text, "html.parser")  # ← これだけで復活
-    return soup.find("table")
+    # JSON が返ってきた場合の防御
+    if html_text.strip().startswith("{"):
+        return None
+
+    # Linux で安定するパーサー
+    soup = BeautifulSoup(html_text, "html.parser")
+
+    # table が見つからない場合は None
+    table = soup.find("table")
+    return table
+
 
 # =========================================================
 # ① AI要約用（LLM に渡す軽量データ）

@@ -710,44 +710,73 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         return func.HttpResponse(f"出馬表取得エラー: {e}", status_code=500)
 
-    # ★ AI要約を使わないので OpenAI クライアント不要
+    # OpenAI クライアント
+    client, err = get_openai_client()
+    if err:
+        return func.HttpResponse(err, status_code=500)
+
     result_html = ""
 
-    # 各馬処理（AI要約なし）
+    # 各馬処理
     for h in horses:
-        try:
-            horse_id = h["horse_id"]
+        horse_id = h["horse_id"]
 
-            # Ajax 過去走取得
-            past_html, err = fetch_past_runs_html(horse_id)
-            if err:
-                result_html += render_card(h, 0, err)
-                continue
-
-            past_table = extract_past_table_from_ajax(past_html)
-            if past_table is None:
-                result_html += render_card(h, 0, "過去走テーブルなし")
-                continue
-
-            # ① 調子スコア用
-            past_runs_condition = parse_past_5runs_for_condition(past_table)
-            if not past_runs_condition:
-                result_html += render_card(h, 0, "過去走データなし")
-                continue
-
-            features, err = extract_features_ajax(past_runs_condition)
-            if err:
-                result_html += render_card(h, 0, err)
-                continue
-
-            score = calc_condition_score_ajax(features)
-
-            # ★ AI要約は行わず、スコアのみ表示
-            result_html += render_card(h, score, "AI要約なし", [])
-
-        except Exception as e:
-            result_html += render_card(h, 0, f"内部エラー: {e}")
+        # Ajax 過去走取得
+        past_html, err = fetch_past_runs_html(horse_id)
+        if err:
+            result_html += render_card(h, 0, err)
             continue
+
+        past_table = extract_past_table_from_ajax(past_html)
+        if past_table is None:
+            result_html += render_card(h, 0, "過去走テーブルなし")
+            continue
+
+        # ---------------------------------------------------------
+        # ① 調子スコア用（詳細データ）
+        # ---------------------------------------------------------
+        past_runs_condition = parse_past_5runs_for_condition(past_table)
+        print("DEBUG past_runs_condition:", past_runs_condition) # ← 追加
+        if not past_runs_condition:
+            result_html += render_card(h, 0, "過去走データなし")
+            continue
+
+        features, err = extract_features_ajax(past_runs_condition)
+        print("DEBUG features:", features) # ← 追加
+        if err:
+            result_html += render_card(h, 0, err)
+            continue
+
+        score = calc_condition_score_ajax(features)
+
+        # ---------------------------------------------------------
+        # ② AI要約用（軽量データ）
+        # ---------------------------------------------------------
+        past_runs_summary = parse_past_5runs(past_table) or []
+
+        pedigree, err = fetch_pedigree_text(horse_id)
+        if err:
+            result_html += render_card(h, score, err)
+            continue
+
+        # LLM に渡すコンテキスト
+        context = json.dumps(
+            {
+                "horse": h,
+                "past_runs": past_runs_summary,   # ← 軽量版を渡す
+                "features": features,
+                "pedigree": pedigree,
+            },
+            ensure_ascii=False,
+        )
+
+        summary, err = generate_summary(client, context)
+        if err:
+            result_html += render_card(h, score, err)
+            continue
+
+        result_html += render_card(h, score, summary, past_runs_summary)
 
     full_html = wrap_html(race_id, result_html)
     return func.HttpResponse(full_html, mimetype="text/html")
+

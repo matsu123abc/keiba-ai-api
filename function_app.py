@@ -717,66 +717,64 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
 
     result_html = ""
 
-    # 各馬処理
+    # 各馬処理（★ここを丸ごと try/except で囲む）
     for h in horses:
-        horse_id = h["horse_id"]
+        try:
+            horse_id = h["horse_id"]
 
-        # Ajax 過去走取得
-        past_html, err = fetch_past_runs_html(horse_id)
-        if err:
-            result_html += render_card(h, 0, err)
+            # Ajax 過去走取得
+            past_html, err = fetch_past_runs_html(horse_id)
+            if err:
+                result_html += render_card(h, 0, err)
+                continue
+
+            past_table = extract_past_table_from_ajax(past_html)
+            if past_table is None:
+                result_html += render_card(h, 0, "過去走テーブルなし")
+                continue
+
+            # ① 調子スコア用
+            past_runs_condition = parse_past_5runs_for_condition(past_table)
+            if not past_runs_condition:
+                result_html += render_card(h, 0, "過去走データなし")
+                continue
+
+            features, err = extract_features_ajax(past_runs_condition)
+            if err:
+                result_html += render_card(h, 0, err)
+                continue
+
+            score = calc_condition_score_ajax(features)
+
+            # ② AI要約用
+            past_runs_summary = parse_past_5runs(past_table) or []
+
+            pedigree, err = fetch_pedigree_text(horse_id)
+            if err:
+                result_html += render_card(h, score, err)
+                continue
+
+            context = json.dumps(
+                {
+                    "horse": h,
+                    "past_runs": past_runs_summary,
+                    "features": features,
+                    "pedigree": pedigree,
+                },
+                ensure_ascii=False,
+            )
+
+            summary, err = generate_summary(client, context)
+            if err:
+                result_html += render_card(h, score, err)
+                continue
+
+            result_html += render_card(h, score, summary, past_runs_summary)
+
+        except Exception as e:
+            # ★ どんな例外でも落とさず、馬ごとにスキップ
+            result_html += render_card(h, 0, f"内部エラー: {e}")
             continue
-
-        past_table = extract_past_table_from_ajax(past_html)
-        if past_table is None:
-            result_html += render_card(h, 0, "過去走テーブルなし")
-            continue
-
-        # ---------------------------------------------------------
-        # ① 調子スコア用（詳細データ）
-        # ---------------------------------------------------------
-        past_runs_condition = parse_past_5runs_for_condition(past_table)
-        print("DEBUG past_runs_condition:", past_runs_condition) # ← 追加
-        if not past_runs_condition:
-            result_html += render_card(h, 0, "過去走データなし")
-            continue
-
-        features, err = extract_features_ajax(past_runs_condition)
-        print("DEBUG features:", features) # ← 追加
-        if err:
-            result_html += render_card(h, 0, err)
-            continue
-
-        score = calc_condition_score_ajax(features)
-
-        # ---------------------------------------------------------
-        # ② AI要約用（軽量データ）
-        # ---------------------------------------------------------
-        past_runs_summary = parse_past_5runs(past_table) or []
-
-        pedigree, err = fetch_pedigree_text(horse_id)
-        if err:
-            result_html += render_card(h, score, err)
-            continue
-
-        # LLM に渡すコンテキスト
-        context = json.dumps(
-            {
-                "horse": h,
-                "past_runs": past_runs_summary,   # ← 軽量版を渡す
-                "features": features,
-                "pedigree": pedigree,
-            },
-            ensure_ascii=False,
-        )
-
-        summary, err = generate_summary(client, context)
-        if err:
-            result_html += render_card(h, score, err)
-            continue
-
-        result_html += render_card(h, score, summary, past_runs_summary)
 
     full_html = wrap_html(race_id, result_html)
     return func.HttpResponse(full_html, mimetype="text/html")
-

@@ -444,6 +444,10 @@ def parse_past_5runs(table):
 # ② 調子スコア計算用（特徴量抽出のための数値データ）
 # =========================================================
 def parse_past_5runs_for_condition(table):
+    # ★ 追加：table が None の場合は空リストを返す
+    if table is None:
+        return []
+
     rows = table.find_all("tr")
     if len(rows) <= 1:
         return []
@@ -460,16 +464,16 @@ def parse_past_5runs_for_condition(table):
             "date": safe(0),
             "race_name": safe(1),
             "class": safe(2),
-            "rank": safe(5),        # ★ ここが最重要
+            "rank": safe(5),
             "time": safe(6),
             "margin": safe(7),
             "pop": safe(8),
-            "agari": safe(11),      # ログから index 11 が agari
+            "agari": safe(11),
             "passing": safe(10),
             "jockey": safe(12),
             "weight": safe(13),
-            "distance": safe(13),   # 暫定（距離は後で修正）
-            "baba": safe(4),        # 暫定
+            "distance": safe(13),
+            "baba": safe(4),
         })
 
     return past_runs
@@ -742,7 +746,7 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
         # ---------------------------------------------------------
         # ② AI要約用（軽量データ）
         # ---------------------------------------------------------
-        past_runs_summary = parse_past_5runs(past_table)
+        past_runs_summary = parse_past_5runs(past_table) or []
 
         pedigree, err = fetch_pedigree_text(horse_id)
         if err:

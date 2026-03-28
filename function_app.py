@@ -411,16 +411,23 @@ def extract_past_table_from_ajax(html_text: str):
 # ① AI要約用（LLM に渡す軽量データ）
 # =========================================================
 def parse_past_5runs(table):
-    rows = table.find_all("tr")[1:]
+    # ★ 防御：table が None の場合は空リスト
+    if table is None:
+        return []
+
+    # tr が無い場合も空リスト
+    rows = table.find_all("tr")
+    if not rows or len(rows) <= 1:
+        return []
+
+    rows = rows[1:]  # ヘッダー除外
     past_runs = []
 
     for row in rows[:5]:
         cols = row.find_all("td")
 
         def safe(idx):
-            if idx < len(cols):
-                return cols[idx].get_text(strip=True)
-            return ""
+            return cols[idx].get_text(strip=True) if idx < len(cols) else ""
 
         past_runs.append({
             "date": safe(0),
@@ -438,7 +445,6 @@ def parse_past_5runs(table):
         })
 
     return past_runs
-
 
 # =========================================================
 # ② 調子スコア計算用（特徴量抽出のための数値データ）

@@ -394,9 +394,8 @@ def fetch_past_runs_html(horse_id: str):
     except Exception as e:
         return None, f"過去走HTML取得エラー: {e}"
 
-
 def extract_past_table_from_ajax(html_text: str):
-    soup = BeautifulSoup(html_text, "lxml")
+    soup = BeautifulSoup(html_text, "html.parser")  # ← これだけで復活
     return soup.find("table")
 
 # =========================================================

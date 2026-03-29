@@ -744,7 +744,8 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
         past_runs_condition = parse_past_5runs_for_condition(past_table)
         print("DEBUG past_runs_condition:", past_runs_condition) # ← 追加
         if not past_runs_condition:
-            result_html += render_card(h, 0, "過去走データなし")
+            simple_summary = f"{h['horse_name']} は過去走データが少ないため、簡易AI要約を生成します。"
+            result_html += render_card(h, 0, simple_summary, [])
             continue
 
         features, err = extract_features_ajax(past_runs_condition)

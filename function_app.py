@@ -800,8 +800,8 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
 
         summary, err = generate_summary(client, context)
 
-        # ★ LLM が None を返した場合の安全対策
-        if not summary:
+        # ★ LLM が None や空文字を返した場合の安全対策
+        if not summary or not isinstance(summary, str):
             summary = f"{h['horse_name']} のAI要約を生成できませんでした（簡易要約）。"
 
         if err:

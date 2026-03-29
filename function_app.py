@@ -457,7 +457,7 @@ def parse_past_5runs_for_condition(table):
         return []
 
     rows = table.find_all("tr")
-    if len(rows) <= 1:
+    if not rows or len(rows) <= 1:
         return []
 
     past_runs = []
@@ -465,7 +465,6 @@ def parse_past_5runs_for_condition(table):
     for row in rows[1:6]:
         cols = row.find_all("td")
 
-        # ★ cols が空ならスキップ
         if not cols:
             continue
 
@@ -477,7 +476,7 @@ def parse_past_5runs_for_condition(table):
                 if cell is None:
                     return ""
                 text = cell.get_text(strip=True)
-                return text if text is not None else ""
+                return text if text else ""
             except:
                 return ""
 
@@ -485,20 +484,19 @@ def parse_past_5runs_for_condition(table):
             "date": safe(0),
             "race_name": safe(1),
             "class": safe(2),
-            "rank": safe(5),
-            "time": safe(6),
-            "margin": safe(7),
-            "pop": safe(8),
-            "agari": safe(11),
-            "passing": safe(10),
+            "rank": safe(11),     # ← ここもズレている可能性あり
+            "time": safe(18),
+            "margin": safe(19),
+            "pop": safe(10),
+            "agari": safe(22),
+            "passing": safe(21),
             "jockey": safe(12),
-            "weight": safe(13),
-            "distance": safe(13),
-            "baba": safe(4),
+            "weight": safe(23),
+            "distance": safe(14),
+            "baba": safe(16),
         })
 
     return past_runs
-
 
 # 特徴量抽出
 def extract_features_ajax(past_runs):

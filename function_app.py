@@ -799,6 +799,11 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
         )
 
         summary, err = generate_summary(client, context)
+
+        # ★ LLM が None を返した場合の安全対策
+        if not summary:
+            summary = f"{h['horse_name']} のAI要約を生成できませんでした（簡易要約）。"
+
         if err:
             html_block = render_card(h, score, err)
             print("DEBUG render_card (LLM err):", html_block)

@@ -730,28 +730,37 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
         # Ajax 過去走取得
         past_html, err = fetch_past_runs_html(horse_id)
         if err:
-            result_html += render_card(h, 0, err)
+            html_block = render_card(h, 0, err)
+            print("DEBUG render_card (err):", html_block)
+            result_html += html_block
             continue
 
         past_table = extract_past_table_from_ajax(past_html)
         if past_table is None:
-            result_html += render_card(h, 0, "過去走テーブルなし")
+            html_block = render_card(h, 0, "過去走テーブルなし")
+            print("DEBUG render_card (no table):", html_block)
+            result_html += html_block
             continue
 
         # ---------------------------------------------------------
         # ① 調子スコア用（詳細データ）
         # ---------------------------------------------------------
         past_runs_condition = parse_past_5runs_for_condition(past_table)
-        print("DEBUG past_runs_condition:", past_runs_condition) # ← 追加
+        print("DEBUG past_runs_condition:", past_runs_condition)
+
         if not past_runs_condition:
             simple_summary = f"{h['horse_name']} は過去走データが少ないため、簡易AI要約を生成します。"
-            result_html += render_card(h, 0, simple_summary, [])
+            html_block = render_card(h, 0, simple_summary, [])
+            print("DEBUG simple_summary HTML:", html_block)
+            result_html += html_block
             continue
 
         features, err = extract_features_ajax(past_runs_condition)
-        print("DEBUG features:", features) # ← 追加
+        print("DEBUG features:", features)
         if err:
-            result_html += render_card(h, 0, err)
+            html_block = render_card(h, 0, err)
+            print("DEBUG render_card (feature err):", html_block)
+            result_html += html_block
             continue
 
         score = calc_condition_score_ajax(features)
@@ -763,14 +772,16 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
 
         pedigree, err = fetch_pedigree_text(horse_id)
         if err:
-            result_html += render_card(h, score, err)
+            html_block = render_card(h, score, err)
+            print("DEBUG render_card (pedigree err):", html_block)
+            result_html += html_block
             continue
 
         # LLM に渡すコンテキスト
         context = json.dumps(
             {
                 "horse": h,
-                "past_runs": past_runs_summary,   # ← 軽量版を渡す
+                "past_runs": past_runs_summary,
                 "features": features,
                 "pedigree": pedigree,
             },
@@ -779,10 +790,14 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
 
         summary, err = generate_summary(client, context)
         if err:
-            result_html += render_card(h, score, err)
+            html_block = render_card(h, score, err)
+            print("DEBUG render_card (LLM err):", html_block)
+            result_html += html_block
             continue
 
-        result_html += render_card(h, score, summary, past_runs_summary)
+        html_block = render_card(h, score, summary, past_runs_summary)
+        print("DEBUG render_card (LLM OK):", html_block)
+        result_html += html_block
 
     full_html = wrap_html(race_id, result_html)
     return func.HttpResponse(full_html, mimetype="text/html")

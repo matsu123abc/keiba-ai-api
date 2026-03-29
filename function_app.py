@@ -736,9 +736,13 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
     # 各馬処理
     for h in horses:
         horse_id = h["horse_id"]
+        print("\n==============================")
+        print("START HORSE:", h["horse_name"])
+        print("==============================")
 
         # Ajax 過去走取得
         past_html, err = fetch_past_runs_html(horse_id)
+        print("DEBUG past_html ERR:", err)
         if err:
             html_block = render_card(h, 0, err)
             print("DEBUG render_card (err):", html_block)
@@ -746,6 +750,7 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
             continue
 
         past_table = extract_past_table_from_ajax(past_html)
+        print("DEBUG past_table:", past_table)
         if past_table is None:
             html_block = render_card(h, 0, "過去走テーブルなし")
             print("DEBUG render_card (no table):", html_block)
@@ -766,7 +771,7 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
             continue
 
         features, err = extract_features_ajax(past_runs_condition)
-        print("DEBUG features:", features)
+        print("DEBUG features:", features, "ERR:", err)
         if err:
             html_block = render_card(h, 0, err)
             print("DEBUG render_card (feature err):", html_block)
@@ -774,13 +779,16 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
             continue
 
         score = calc_condition_score_ajax(features)
+        print("DEBUG score:", score)
 
         # ---------------------------------------------------------
         # ② AI要約用（軽量データ）
         # ---------------------------------------------------------
         past_runs_summary = parse_past_5runs(past_table) or []
+        print("DEBUG past_runs_summary:", past_runs_summary)
 
         pedigree, err = fetch_pedigree_text(horse_id)
+        print("DEBUG pedigree:", pedigree, "ERR:", err)
         if err:
             html_block = render_card(h, score, err)
             print("DEBUG render_card (pedigree err):", html_block)
@@ -797,10 +805,12 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
             },
             ensure_ascii=False,
         )
+        print("DEBUG context:", context)
 
         summary, err = generate_summary(client, context)
+        print("DEBUG summary:", summary, "ERR:", err)
 
-        # ★ LLM が None や空文字を返した場合の安全対策
+        # ★ LLM が None や空文字、文字列以外を返した場合の安全対策
         if not summary or not isinstance(summary, str):
             summary = f"{h['horse_name']} のAI要約を生成できませんでした（簡易要約）。"
 
@@ -815,5 +825,5 @@ def process_past(req: func.HttpRequest) -> func.HttpResponse:
         result_html += html_block
 
     full_html = wrap_html(race_id, result_html)
+    print("DEBUG FINAL HTML LENGTH:", len(full_html))
     return func.HttpResponse(full_html, mimetype="text/html")
-

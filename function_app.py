@@ -465,12 +465,21 @@ def parse_past_5runs_for_condition(table):
     for row in rows[1:6]:
         cols = row.find_all("td")
 
-        # ★ cols が空ならスキップ（これが最重要）
+        # ★ cols が空ならスキップ
         if not cols:
             continue
 
         def safe(idx):
-            return cols[idx].get_text(strip=True) if idx < len(cols) else ""
+            try:
+                if idx >= len(cols):
+                    return ""
+                cell = cols[idx]
+                if cell is None:
+                    return ""
+                text = cell.get_text(strip=True)
+                return text if text is not None else ""
+            except:
+                return ""
 
         past_runs.append({
             "date": safe(0),
@@ -489,6 +498,7 @@ def parse_past_5runs_for_condition(table):
         })
 
     return past_runs
+
 
 # 特徴量抽出
 def extract_features_ajax(past_runs):

@@ -628,21 +628,28 @@ def generate_summary(client, context_json):
 
     try:
         response = client.chat.completions.create(
-            model="keiba-gpt4omini",   # ★ 章さんのデプロイ名
+            model="keiba-gpt4omini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
         )
 
-        content = response.choices[0].message.content
+        # ★ content が None のケースがある
+        content = getattr(response.choices[0].message, "content", None)
+
+        if not content:
+            return None, "LLM応答が空でした"
 
         # ★ JSON 部分だけを安全に抽出
         summary = extract_json(content)
+
         if summary is None:
             return None, f"LLM JSON抽出エラー: {content}"
 
+        # ★ 必ず (summary, None) のタプルで返す
         return summary, None
 
     except Exception as e:
+        # ★ 必ず (None, エラー) のタプルで返す
         return None, f"LLM要約エラー: {e}"
 
 

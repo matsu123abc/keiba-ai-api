@@ -456,15 +456,20 @@ def parse_past_5runs_for_condition(table):
     if table is None:
         return []
 
-    rows = table.find_all("tr")
-    if not rows or len(rows) <= 1:
+    # tbody の tr のみ取得（これが最重要）
+    tbody = table.find("tbody")
+    if tbody is None:
+        return []
+
+    data_rows = tbody.find_all("tr")
+    if not data_rows:
         return []
 
     past_runs = []
 
-    for row in rows[1:6]:
+    # 最大5走まで
+    for row in data_rows[:5]:
         cols = row.find_all("td")
-
         if not cols:
             continue
 
@@ -472,26 +477,23 @@ def parse_past_5runs_for_condition(table):
             try:
                 if idx >= len(cols):
                     return ""
-                cell = cols[idx]
-                if cell is None:
-                    return ""
-                text = cell.get_text(strip=True)
+                text = cols[idx].get_text(strip=True)
                 return text if text else ""
             except:
                 return ""
 
         past_runs.append({
             "date": safe(0),
-            "race_name": safe(1),
+            "race_name": safe(4),
             "class": safe(2),
-            "rank": safe(11),     # ← ここもズレている可能性あり
+            "rank": safe(11),
             "time": safe(18),
             "margin": safe(19),
             "pop": safe(10),
             "agari": safe(22),
             "passing": safe(21),
             "jockey": safe(12),
-            "weight": safe(23),
+            "weight": safe(13),
             "distance": safe(14),
             "baba": safe(16),
         })
